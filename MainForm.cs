@@ -91,6 +91,7 @@ public partial class MainForm : Form
         Icon = SystemIcons.Application;
         KeyPreview = true;
         KeyDown += MainForm_KeyDown;
+        Load += MainForm_Load;
 
         // Menu
         _menuStrip = new MenuStrip();
@@ -136,7 +137,7 @@ public partial class MainForm : Form
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
-            SplitterDistance = 180,
+            SplitterDistance = 200,
             SplitterWidth = 6,
             FixedPanel = FixedPanel.None,
             BorderStyle = BorderStyle.None,
@@ -150,13 +151,20 @@ public partial class MainForm : Form
         // Right panel: tab bar at bottom + editor area
         _editorPanel = new Panel { Dock = DockStyle.Fill };
 
+        // 에디터 상단 구분선 (드라이브 선택 아래 선과 동일)
+        var editorTopSeparator = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 1,
+            BackColor = Color.FromArgb(180, 180, 175)
+        };
+
         // A4 page outline panel (contains the editor with page-like appearance)
         _pageOutlinePanel = new Panel
         {
             Dock = DockStyle.Fill,
             BackColor = Color.FromArgb(245, 245, 242), // 배경 (용지 바깥)
-            // A4 여백 가이드: 상하좌우에 약간의 패딩으로 용지 느낌
-            Padding = new Padding(0, 12, 20, 12)
+            Padding = new Padding(0, 0, 0, 0)
         };
         _pageOutlinePanel.Paint += PageOutlinePanel_Paint;
 
@@ -170,6 +178,8 @@ public partial class MainForm : Form
 
         _editorPanel.Controls.Add(_pageOutlinePanel);
         _pageOutlinePanel.BringToFront();
+        _editorPanel.Controls.Add(editorTopSeparator);
+        editorTopSeparator.BringToFront();
 
         _tabBar = new TabControl
         {
@@ -185,6 +195,12 @@ public partial class MainForm : Form
         _tabBar.DrawItem += TabBar_DrawItem;
         _tabBar.SelectedIndexChanged += TabBar_SelectedIndexChanged;
         _tabBar.MouseDown += TabBar_MouseDown;
+        _tabBar.Paint += (s, pe) =>
+        {
+            // 탭바 상단에 1px 선만 그리기
+            using var pen = new Pen(Color.FromArgb(180, 180, 175), 1f);
+            pe.Graphics.DrawLine(pen, 0, 0, _tabBar.Width, 0);
+        };
 
         _editorPanel.Controls.Add(_tabBar);
         _splitContainer.Panel2.Controls.Add(_editorPanel);
@@ -223,18 +239,37 @@ public partial class MainForm : Form
         if (_driveCombo.Items.Count > 0) _driveCombo.SelectedIndex = 0;
         _driveCombo.SelectedIndexChanged += DriveCombo_Changed;
 
+        // 드라이브 선택 위 구분선
+        var driveTopSeparator = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 1,
+            BackColor = Color.FromArgb(180, 180, 175)
+        };
+
+        // 드라이브 선택 아래 구분선 (30% 흐리게)
+        var driveSeparator = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 1,
+            BackColor = Color.FromArgb(202, 202, 199)
+        };
+
         // Folder tree (top half)
         _folderTree = new TreeView
         {
             Dock = DockStyle.Fill,
             ShowLines = true,
             ShowPlusMinus = true,
-            ShowRootLines = true,
+            ShowRootLines = false,
             HideSelection = false,
             BorderStyle = BorderStyle.None,
             Font = new Font("맑은 고딕", 9.5f),
             ItemHeight = 20,
-            BackColor = Color.White
+            BackColor = Color.White,
+            Indent = 15,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
         };
         _folderTree.BeforeExpand += FolderTree_BeforeExpand;
         _folderTree.AfterSelect += FolderTree_AfterSelect;
@@ -255,8 +290,7 @@ public partial class MainForm : Form
         // File list (bottom half)
         _fileList = new ListBox
         {
-            Dock = DockStyle.Bottom,
-            Height = 200,
+            Dock = DockStyle.Fill,
             IntegralHeight = false,
             BorderStyle = BorderStyle.None,
             Font = new Font("맑은 고딕", 9.5f),
@@ -270,17 +304,24 @@ public partial class MainForm : Form
             Dock = DockStyle.Fill,
             Orientation = Orientation.Horizontal,
             SplitterDistance = 250,
-            SplitterWidth = 4,
+            SplitterWidth = 6,
             BorderStyle = BorderStyle.None,
-            BackColor = Color.FromArgb(230, 230, 225)
+            BackColor = Color.FromArgb(220, 220, 215)
         };
+        innerSplit.Paint += SplitContainer_Paint;
+        innerSplit.Panel1.Padding = new Padding(0, 3, 0, 0);
         innerSplit.Panel1.Controls.Add(_folderTree);
         innerSplit.Panel2.Controls.Add(_fileList);
         innerSplit.Panel2.Controls.Add(_filterCombo);
 
         browserPanel.Controls.Add(innerSplit);
+        browserPanel.Controls.Add(driveSeparator);
         browserPanel.Controls.Add(_driveCombo);
+        browserPanel.Controls.Add(driveTopSeparator);
+        // Dock=Top 순서: BringToFront가 나중인 게 위에 표시됨
+        driveSeparator.BringToFront();
         _driveCombo.BringToFront();
+        driveTopSeparator.BringToFront();
 
         _splitContainer.Panel1.Controls.Add(browserPanel);
 
@@ -317,7 +358,24 @@ public partial class MainForm : Form
             {
                 foreach (var dir in Directory.GetDirectories(path))
                 {
-                    var child = new TreeNode(Path.GetFileName(dir)) { Tag = dir };
+                    string folderName = Path.GetFileName(dir);
+                    // 시스템 숨김 폴더 제외
+                    if (folderName.Equals("$Recycle.Bin", StringComparison.OrdinalIgnoreCase) ||
+                        folderName.Equals("$SysReset", StringComparison.OrdinalIgnoreCase) ||
+                        folderName.StartsWith("$") ||
+                        folderName.Contains("%"))
+                        continue;
+
+                    // 숨김/시스템 속성 폴더 제외
+                    try
+                    {
+                        var attrs = new DirectoryInfo(dir).Attributes;
+                        if (attrs.HasFlag(FileAttributes.Hidden) || attrs.HasFlag(FileAttributes.System))
+                            continue;
+                    }
+                    catch { continue; }
+
+                    var child = new TreeNode(folderName) { Tag = dir };
                     child.Nodes.Add(""); // placeholder
                     node.Nodes.Add(child);
                 }
@@ -819,7 +877,9 @@ public partial class MainForm : Form
     {
         _fontFamilyCombo = new ToolStripComboBox("fontFamily")
         {
-            DropDownStyle = ComboBoxStyle.DropDownList, Width = 160, ToolTipText = "글꼴"
+            DropDownStyle = ComboBoxStyle.DropDownList, ToolTipText = "글꼴",
+            AutoSize = false,
+            Size = new Size(192, 25)
         };
         // 시스템에 설치된 모든 폰트 로딩
         using (var ifc = new InstalledFontCollection())
@@ -837,7 +897,9 @@ public partial class MainForm : Form
 
         _fontSizeCombo = new ToolStripComboBox("fontSize")
         {
-            DropDownStyle = ComboBoxStyle.DropDown, Width = 45, ToolTipText = "글꼴 크기"
+            DropDownStyle = ComboBoxStyle.DropDown, ToolTipText = "글꼴 크기",
+            AutoSize = false,
+            Size = new Size(50, 25)
         };
         _fontSizeCombo.Items.AddRange(new object[] { "8", "9", "10", "11", "12", "14", "16", "18", "20", "24", "28", "32", "36", "48", "72" });
         _fontSizeCombo.Text = "12";
@@ -1545,6 +1607,16 @@ public partial class MainForm : Form
         }
     }
 
+    private void MainForm_Load(object? sender, EventArgs e)
+    {
+        // 폼이 완전히 로드된 후 splitter 위치 복원
+        if (_pendingSplitterDistance > 0)
+        {
+            int maxDist = _splitContainer.Width - _splitContainer.Panel2MinSize - _splitContainer.SplitterWidth;
+            _splitContainer.SplitterDistance = Math.Clamp(_pendingSplitterDistance, 120, Math.Min(maxDist, 600));
+        }
+    }
+
     private void MainForm_KeyDown(object? sender, KeyEventArgs e)
     {
         if (e.KeyCode == Keys.Escape && _findPanel.Visible)
@@ -1556,18 +1628,29 @@ public partial class MainForm : Form
 
     private void SplitContainer_Paint(object? sender, PaintEventArgs e)
     {
-        // Draw a subtle vertical line in the center of the splitter
-        var rect = _splitContainer.SplitterRectangle;
-        int cx = rect.Left + rect.Width / 2;
-        using var pen = new Pen(Color.FromArgb(180, 180, 175), 1f);
-        e.Graphics.DrawLine(pen, cx, rect.Top + 4, cx, rect.Bottom - 4);
+        if (sender is not SplitContainer sc) return;
 
-        // Draw small grip dots in the center
-        int cy = rect.Top + rect.Height / 2;
+        var rect = sc.SplitterRectangle;
+        using var pen = new Pen(Color.FromArgb(180, 180, 175), 1f);
         using var dotBrush = new SolidBrush(Color.FromArgb(160, 160, 155));
-        for (int i = -2; i <= 2; i++)
+
+        if (sc.Orientation == Orientation.Vertical)
         {
-            e.Graphics.FillEllipse(dotBrush, cx - 1, cy + i * 6 - 1, 3, 3);
+            // 좌우 분할: 세로선 + 그립 점
+            int cx = rect.Left + rect.Width / 2;
+            e.Graphics.DrawLine(pen, cx, rect.Top + 4, cx, rect.Bottom - 4);
+            int cy = rect.Top + rect.Height / 2;
+            for (int i = -2; i <= 2; i++)
+                e.Graphics.FillEllipse(dotBrush, cx - 1, cy + i * 6 - 1, 3, 3);
+        }
+        else
+        {
+            // 상하 분할: 가로선 + 그립 점
+            int cy = rect.Top + rect.Height / 2;
+            e.Graphics.DrawLine(pen, rect.Left + 4, cy, rect.Right - 4, cy);
+            int cx = rect.Left + rect.Width / 2;
+            for (int i = -2; i <= 2; i++)
+                e.Graphics.FillEllipse(dotBrush, cx + i * 6 - 1, cy - 1, 3, 3);
         }
     }
 
@@ -1722,6 +1805,8 @@ public partial class MainForm : Form
         catch { }
     }
 
+    private int _pendingSplitterDistance = -1;
+
     private void LoadSettings()
     {
         if (!File.Exists(_settingsPath)) return;
@@ -1759,7 +1844,8 @@ public partial class MainForm : Form
 
             if (settings.TryGetValue("SplitterDistance", out var sd) && int.TryParse(sd, out int splitter))
             {
-                _splitContainer.SplitterDistance = Math.Clamp(splitter, 50, Width - 200);
+                // 폼 로드 후 적용하기 위해 저장
+                _pendingSplitterDistance = splitter;
             }
         }
         catch { }
