@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <RootNamespace>YunseulMemo</RootNamespace>
+    <AssemblyName>YUNSEUL-EDITOR</AssemblyName>
+    <Version>1.1.0</Version>
+  </PropertyGroup>
+
+</Project>
