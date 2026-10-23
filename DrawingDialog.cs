@@ -61,11 +61,11 @@ public sealed class DrawingDialog : Form
         Font = new Font("맑은 고딕", 9f);
         DoubleBuffered = true;
 
-        // 1. 상단 툴바 패널 (직관적인 예쁜 아이콘 툴바)
+        // 1. 상단 툴바 패널 (직관적인 예쁜 아이콘 툴바 + 눈에 띄는 삽입 버튼)
         _toolPanel = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 52,
+            Height = 54,
             BackColor = Color.FromArgb(248, 250, 252),
             Padding = new Padding(10, 8, 10, 8)
         };
@@ -89,13 +89,13 @@ public sealed class DrawingDialog : Form
         AddSeparator(ref curX);
 
         // 굵기 스핀버튼
-        var lblSize = new Label { Text = "굵기", Location = new Point(curX, 16), AutoSize = true, Font = new Font("맑은 고딕", 8.5f, FontStyle.Bold), ForeColor = Color.FromArgb(71, 85, 105) };
+        var lblSize = new Label { Text = "굵기", Location = new Point(curX, 17), AutoSize = true, Font = new Font("맑은 고딕", 8.5f, FontStyle.Bold), ForeColor = Color.FromArgb(71, 85, 105) };
         _toolPanel.Controls.Add(lblSize);
         curX += 30;
 
         _nudSize = new NumericUpDown
         {
-            Location = new Point(curX, 12),
+            Location = new Point(curX, 13),
             Width = 48,
             Minimum = 1,
             Maximum = 50,
@@ -113,7 +113,7 @@ public sealed class DrawingDialog : Form
         // 현재 색상 미리보기
         _pnlColorPreview = new Panel
         {
-            Location = new Point(curX, 12),
+            Location = new Point(curX, 13),
             Size = new Size(26, 26),
             BackColor = _currentColor,
             BorderStyle = BorderStyle.FixedSingle,
@@ -141,7 +141,7 @@ public sealed class DrawingDialog : Form
             var name = presetNames[i];
             var pnlChip = new Panel
             {
-                Location = new Point(curX, 15),
+                Location = new Point(curX, 16),
                 Size = new Size(20, 20),
                 BackColor = c,
                 BorderStyle = BorderStyle.FixedSingle,
@@ -161,7 +161,7 @@ public sealed class DrawingDialog : Form
         var btnPalette = new Button
         {
             Text = "🎨 팔레트/CMYK",
-            Location = new Point(curX, 11),
+            Location = new Point(curX, 12),
             Size = new Size(115, 28),
             FlatStyle = FlatStyle.Flat,
             Font = new Font("맑은 고딕", 8.5f),
@@ -187,6 +187,24 @@ public sealed class DrawingDialog : Form
 
         var btnClear = CreateActionBtn("🗑️", "캔버스 모두 지우기", ref curX, () => ClearCanvas());
 
+        // ★ 우측 상단 명시적인 [🖼️ 본문에 그림 삽입 (Enter)] 버튼 (누구나 한눈에 찾을 수 있음)
+        var btnTopInsert = new Button
+        {
+            Text = "🖼️ 본문에 그림 삽입 (Enter)",
+            Location = new Point(ClientSize.Width - 215, 9),
+            Size = new Size(205, 36),
+            Anchor = AnchorStyles.Right | AnchorStyles.Top,
+            BackColor = Color.FromArgb(37, 99, 235),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("맑은 고딕", 9.5f, FontStyle.Bold),
+            Cursor = Cursors.Hand
+        };
+        btnTopInsert.FlatAppearance.BorderSize = 0;
+        btnTopInsert.Click += (_, _) => FinishAndInsert();
+        _toolTip.SetToolTip(btnTopInsert, "다 그린 그림을 에디터 본문에 즉시 삽입합니다 (단축키: Enter)");
+        _toolPanel.Controls.Add(btnTopInsert);
+
         Controls.Add(_toolPanel);
 
         // 2. 하단 상태 바 (캔버스 크기 안내 및 [문서에 삽입], [취소] 버튼)
@@ -205,7 +223,7 @@ public sealed class DrawingDialog : Form
 
         _lblCanvasSize = new Label
         {
-            Text = "캔버스 크기: 1100 × 620 px (창 크기를 조절하면 캔버스도 함께 조절됩니다)",
+            Text = "캔버스 크기: 1100 × 620 px (그림 완성 후 상단 또는 하단의 [본문에 그림 삽입] 클릭 또는 Enter)",
             Location = new Point(16, 15),
             AutoSize = true,
             Font = new Font("맑은 고딕", 9f),
@@ -215,9 +233,9 @@ public sealed class DrawingDialog : Form
 
         var btnInsert = new Button
         {
-            Text = "✔ 문서에 삽입(&I)",
-            Size = new Size(130, 34),
-            Location = new Point(ClientSize.Width - 235, 7),
+            Text = "✔ 본문에 삽입 (Enter)",
+            Size = new Size(160, 34),
+            Location = new Point(ClientSize.Width - 255, 7),
             Anchor = AnchorStyles.Right | AnchorStyles.Top,
             BackColor = Color.FromArgb(37, 99, 235),
             ForeColor = Color.White,
@@ -226,18 +244,13 @@ public sealed class DrawingDialog : Form
             Cursor = Cursors.Hand
         };
         btnInsert.FlatAppearance.BorderSize = 0;
-        btnInsert.Click += (_, _) =>
-        {
-            ResultImage = TrimAndExportBitmap(_canvasBitmap);
-            DialogResult = DialogResult.OK;
-            Close();
-        };
+        btnInsert.Click += (_, _) => FinishAndInsert();
 
         var btnCancel = new Button
         {
             Text = "취소",
             Size = new Size(80, 34),
-            Location = new Point(ClientSize.Width - 95, 7),
+            Location = new Point(ClientSize.Width - 90, 7),
             Anchor = AnchorStyles.Right | AnchorStyles.Top,
             BackColor = Color.White,
             ForeColor = Color.FromArgb(71, 85, 105),
@@ -272,9 +285,16 @@ public sealed class DrawingDialog : Form
 
         Resize += DrawingDialog_Resize;
 
-        // 단축키 지원
+        // 단축키 지원 (Enter: 삽입, Ctrl+Z: 취소, Ctrl+Y: 재실행)
         KeyPreview = true;
         KeyDown += DrawingDialog_KeyDown;
+    }
+
+    private void FinishAndInsert()
+    {
+        ResultImage = TrimAndExportBitmap(_canvasBitmap);
+        DialogResult = DialogResult.OK;
+        Close();
     }
 
     private void AddSeparator(ref int curX)
@@ -282,7 +302,7 @@ public sealed class DrawingDialog : Form
         curX += 4;
         _toolPanel.Controls.Add(new Panel
         {
-            Location = new Point(curX, 13),
+            Location = new Point(curX, 14),
             Size = new Size(1, 26),
             BackColor = Color.FromArgb(226, 232, 240)
         });
@@ -294,7 +314,7 @@ public sealed class DrawingDialog : Form
         var btn = new Button
         {
             Text = icon,
-            Location = new Point(curX, 9),
+            Location = new Point(curX, 10),
             Size = new Size(38, 32),
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI Emoji", 12f),
@@ -332,7 +352,7 @@ public sealed class DrawingDialog : Form
         var btn = new Button
         {
             Text = icon,
-            Location = new Point(curX, 9),
+            Location = new Point(curX, 10),
             Size = new Size(38, 32),
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI Emoji", 11f),
@@ -401,7 +421,7 @@ public sealed class DrawingDialog : Form
     {
         if (_lblCanvasSize != null && _canvasBitmap != null)
         {
-            _lblCanvasSize.Text = $"캔버스 크기: {_canvasBitmap.Width} × {_canvasBitmap.Height} px (창 크기를 조절하면 캔버스도 함께 조절됩니다)";
+            _lblCanvasSize.Text = $"캔버스 크기: {_canvasBitmap.Width} × {_canvasBitmap.Height} px (그림 완성 후 상단 또는 하단의 [본문에 그림 삽입] 클릭 또는 Enter)";
         }
     }
 
@@ -595,6 +615,14 @@ public sealed class DrawingDialog : Form
 
     private void DrawingDialog_KeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.KeyCode == Keys.Enter && !e.Control && !e.Alt && !e.Shift)
+        {
+            FinishAndInsert();
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            return;
+        }
+
         if (e.Control && e.KeyCode == Keys.Z)
         {
             Undo();
