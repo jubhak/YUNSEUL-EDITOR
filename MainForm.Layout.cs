@@ -382,6 +382,7 @@ public partial class MainForm
         _a4ViewBtn = TB("A4 용지 보기", Ico.A4View, (_, _) => { _showA4View = !_showA4View; ApplyViewSettings(); });
         _a4ViewBtn.CheckOnClick = true;
         _marginBtn = TB("용지 여백 설정", Ico.Margin, OnPageMarginSetting);
+        _marginBtn.Visible = _showA4View;
         t.Add(_a4ViewBtn);
         t.Add(_marginBtn);
         t.Add(new ToolStripSeparator());

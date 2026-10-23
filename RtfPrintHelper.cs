@@ -3,7 +3,9 @@ using System.Runtime.InteropServices;
 
 namespace YunseulMemo;
 
-/// <summary>RichTextBox EM_FORMATRANGE 기반 서식 인쇄.</summary>
+/// <summary>
+/// RichTextBox EM_FORMATRANGE 기반 서식 인쇄 및 머리말/꼬리말 렌더링.
+/// </summary>
 internal static class RtfPrintHelper
 {
     private const int WM_USER = 0x0400;
@@ -38,7 +40,13 @@ internal static class RtfPrintHelper
         public CHARRANGE chrg;
     }
 
-    public static void PrintPage(RichTextBox editor, PrintPageEventArgs e, ref int charIndex)
+    public static void PrintPage(
+        RichTextBox editor,
+        PrintPageEventArgs e,
+        ref int charIndex,
+        int pageNumber = 1,
+        string? headerText = null,
+        string? footerText = null)
     {
         if (e.Graphics == null) return;
 
@@ -48,10 +56,55 @@ internal static class RtfPrintHelper
         var margin = e.MarginBounds;
         var page = e.PageBounds;
 
+        int headerHeight = 0;
+        int footerHeight = 0;
+
+        // 1. 머리말 렌더링 (설정 시)
+        if (!string.IsNullOrWhiteSpace(headerText))
+        {
+            headerHeight = 28;
+            using var headerFont = new Font("맑은 고딕", 8.5f, FontStyle.Regular);
+            using var headerBrush = new SolidBrush(Color.FromArgb(100, 116, 139));
+            using var sf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+
+            var headerRect = new Rectangle(margin.Left, Math.Max(10, margin.Top - headerHeight), margin.Width, headerHeight - 4);
+            e.Graphics.DrawString(headerText, headerFont, headerBrush, headerRect, sf);
+
+            using var pen = new Pen(Color.FromArgb(203, 213, 225), 0.8f);
+            e.Graphics.DrawLine(pen, margin.Left, margin.Top - 4, margin.Right, margin.Top - 4);
+        }
+
+        // 2. 꼬리말 렌더링 (설정 시)
+        if (!string.IsNullOrWhiteSpace(footerText))
+        {
+            footerHeight = 28;
+            string processedFooter = footerText
+                .Replace("[페이지]", pageNumber.ToString())
+                .Replace("{PAGE}", pageNumber.ToString());
+
+            using var footerFont = new Font("맑은 고딕", 8.5f, FontStyle.Regular);
+            using var footerBrush = new SolidBrush(Color.FromArgb(100, 116, 139));
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+
+            var footerRect = new Rectangle(margin.Left, margin.Bottom + 4, margin.Width, footerHeight);
+            e.Graphics.DrawString(processedFooter, footerFont, footerBrush, footerRect, sf);
+
+            using var pen = new Pen(Color.FromArgb(203, 213, 225), 0.8f);
+            e.Graphics.DrawLine(pen, margin.Left, margin.Bottom + 4, margin.Right, margin.Bottom + 4);
+        }
+
+        // 3. 본문 RTF 출력 영역 (머리말/꼬리말 공간 확보)
+        var bodyMargin = new Rectangle(
+            margin.Left,
+            margin.Top + (headerHeight > 0 ? 6 : 0),
+            margin.Width,
+            Math.Max(50, margin.Height - (headerHeight > 0 ? 6 : 0) - (footerHeight > 0 ? 6 : 0))
+        );
+
         var fmt = new FORMATRANGE
         {
             chrg = new CHARRANGE { cpMin = charIndex, cpMax = editor.TextLength },
-            rc = ToTwips(margin, dpiX, dpiY),
+            rc = ToTwips(bodyMargin, dpiX, dpiY),
             rcPage = ToTwips(page, dpiX, dpiY)
         };
 

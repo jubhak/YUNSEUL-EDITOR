@@ -5,7 +5,7 @@ namespace YunseulMemo;
 
 /// <summary>
 /// A4 용지 여백 설정 대화상자.
-/// 상/하/좌/우 여백(mm 단위) 설정 및 실시간 용지 미리보기를 제공합니다.
+/// 스핀버튼 조절 시 화면에 실시간(Live) 즉시 반영되며, 상/하/좌/우 여백(mm 단위)을 조절할 수 있습니다.
 /// </summary>
 public sealed class PageMarginDialog : Form
 {
@@ -14,6 +14,7 @@ public sealed class PageMarginDialog : Form
     private readonly NumericUpDown _nudLeft;
     private readonly NumericUpDown _nudRight;
     private readonly Panel _pnlPreview;
+    private readonly Action<Margins>? _liveUpdateCallback;
 
     /// <summary>1/100인치 단위의 인쇄 및 레이아웃 Margins.</summary>
     public Margins ResultMargins
@@ -28,10 +29,12 @@ public sealed class PageMarginDialog : Form
         }
     }
 
-    public PageMarginDialog(Margins currentMargins)
+    public PageMarginDialog(Margins currentMargins, Action<Margins>? liveUpdateCallback = null)
     {
+        _liveUpdateCallback = liveUpdateCallback;
+
         Text = "용지 여백 설정 (A4)";
-        ClientSize = new Size(490, 360);
+        ClientSize = new Size(500, 360);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false;
@@ -42,9 +45,9 @@ public sealed class PageMarginDialog : Form
         // 좌측: 여백 입력 그룹
         var grpMargins = new GroupBox
         {
-            Text = "여백 설정 (단위: mm)",
+            Text = "여백 설정 (단위: mm - 조절 시 즉시 반영)",
             Location = new Point(16, 16),
-            Size = new Size(240, 260),
+            Size = new Size(250, 260),
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
         };
 
@@ -55,29 +58,29 @@ public sealed class PageMarginDialog : Form
 
         int curY = 32;
         var lblTop = new Label { Text = "위쪽 (Top):", Location = new Point(16, curY + 3), AutoSize = true, Font = new Font("Segoe UI", 9f) };
-        _nudTop = new NumericUpDown { Location = new Point(125, curY), Width = 70, Minimum = 0, Maximum = 100, Value = Math.Clamp(topMm, 0, 100), Font = new Font("Segoe UI", 9f) };
+        _nudTop = new NumericUpDown { Location = new Point(135, curY), Width = 75, Minimum = 0, Maximum = 100, Value = Math.Clamp(topMm, 0, 100), Font = new Font("Segoe UI", 9f) };
         grpMargins.Controls.AddRange([lblTop, _nudTop]);
 
         curY += 40;
         var lblBottom = new Label { Text = "아래쪽 (Bottom):", Location = new Point(16, curY + 3), AutoSize = true, Font = new Font("Segoe UI", 9f) };
-        _nudBottom = new NumericUpDown { Location = new Point(125, curY), Width = 70, Minimum = 0, Maximum = 100, Value = Math.Clamp(bottomMm, 0, 100), Font = new Font("Segoe UI", 9f) };
+        _nudBottom = new NumericUpDown { Location = new Point(135, curY), Width = 75, Minimum = 0, Maximum = 100, Value = Math.Clamp(bottomMm, 0, 100), Font = new Font("Segoe UI", 9f) };
         grpMargins.Controls.AddRange([lblBottom, _nudBottom]);
 
         curY += 40;
         var lblLeft = new Label { Text = "왼쪽 (Left):", Location = new Point(16, curY + 3), AutoSize = true, Font = new Font("Segoe UI", 9f) };
-        _nudLeft = new NumericUpDown { Location = new Point(125, curY), Width = 70, Minimum = 0, Maximum = 100, Value = Math.Clamp(leftMm, 0, 100), Font = new Font("Segoe UI", 9f) };
+        _nudLeft = new NumericUpDown { Location = new Point(135, curY), Width = 75, Minimum = 0, Maximum = 100, Value = Math.Clamp(leftMm, 0, 100), Font = new Font("Segoe UI", 9f) };
         grpMargins.Controls.AddRange([lblLeft, _nudLeft]);
 
         curY += 40;
         var lblRight = new Label { Text = "오른쪽 (Right):", Location = new Point(16, curY + 3), AutoSize = true, Font = new Font("Segoe UI", 9f) };
-        _nudRight = new NumericUpDown { Location = new Point(125, curY), Width = 70, Minimum = 0, Maximum = 100, Value = Math.Clamp(rightMm, 0, 100), Font = new Font("Segoe UI", 9f) };
+        _nudRight = new NumericUpDown { Location = new Point(135, curY), Width = 75, Minimum = 0, Maximum = 100, Value = Math.Clamp(rightMm, 0, 100), Font = new Font("Segoe UI", 9f) };
         grpMargins.Controls.AddRange([lblRight, _nudRight]);
 
         curY += 46;
-        var btnPresetDefault = new Button { Text = "기본 (20mm)", Location = new Point(16, curY), Width = 95, Height = 26, Font = new Font("Segoe UI", 8.5f) };
+        var btnPresetDefault = new Button { Text = "기본 (20mm)", Location = new Point(16, curY), Width = 100, Height = 28, Font = new Font("Segoe UI", 8.5f) };
         btnPresetDefault.Click += (_, _) => SetAllMargins(20, 20, 25, 25);
 
-        var btnPresetNarrow = new Button { Text = "좁게 (12mm)", Location = new Point(120, curY), Width = 95, Height = 26, Font = new Font("Segoe UI", 8.5f) };
+        var btnPresetNarrow = new Button { Text = "좁게 (12mm)", Location = new Point(125, curY), Width = 100, Height = 28, Font = new Font("Segoe UI", 8.5f) };
         btnPresetNarrow.Click += (_, _) => SetAllMargins(12, 12, 15, 15);
 
         grpMargins.Controls.AddRange([btnPresetDefault, btnPresetNarrow]);
@@ -86,7 +89,7 @@ public sealed class PageMarginDialog : Form
         var grpPreview = new GroupBox
         {
             Text = "용지 미리보기",
-            Location = new Point(270, 16),
+            Location = new Point(280, 16),
             Size = new Size(200, 260),
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
         };
@@ -99,17 +102,17 @@ public sealed class PageMarginDialog : Form
         _pnlPreview.Paint += DrawPagePreview;
         grpPreview.Controls.Add(_pnlPreview);
 
-        _nudTop.ValueChanged += (_, _) => _pnlPreview.Invalidate();
-        _nudBottom.ValueChanged += (_, _) => _pnlPreview.Invalidate();
-        _nudLeft.ValueChanged += (_, _) => _pnlPreview.Invalidate();
-        _nudRight.ValueChanged += (_, _) => _pnlPreview.Invalidate();
+        _nudTop.ValueChanged += (_, _) => OnMarginValueChanged();
+        _nudBottom.ValueChanged += (_, _) => OnMarginValueChanged();
+        _nudLeft.ValueChanged += (_, _) => OnMarginValueChanged();
+        _nudRight.ValueChanged += (_, _) => OnMarginValueChanged();
 
         // 하단 버튼 바
         var okBtn = new Button
         {
             Text = "확인",
             DialogResult = DialogResult.OK,
-            Location = new Point(275, 295),
+            Location = new Point(285, 295),
             Width = 95,
             Height = 36,
             BackColor = Color.FromArgb(37, 99, 235),
@@ -124,7 +127,7 @@ public sealed class PageMarginDialog : Form
         {
             Text = "취소",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(378, 295),
+            Location = new Point(388, 295),
             Width = 85,
             Height = 36,
             BackColor = Color.White,
@@ -141,13 +144,19 @@ public sealed class PageMarginDialog : Form
         Controls.AddRange([grpMargins, grpPreview, okBtn, cancelBtn]);
     }
 
+    private void OnMarginValueChanged()
+    {
+        _pnlPreview.Invalidate();
+        _liveUpdateCallback?.Invoke(ResultMargins);
+    }
+
     private void SetAllMargins(int left, int right, int top, int bottom)
     {
         _nudLeft.Value = left;
         _nudRight.Value = right;
         _nudTop.Value = top;
         _nudBottom.Value = bottom;
-        _pnlPreview.Invalidate();
+        OnMarginValueChanged();
     }
 
     private static int HundredthInchToMm(int val) => (int)Math.Round(val * 0.254);
@@ -158,7 +167,6 @@ public sealed class PageMarginDialog : Form
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        // A4 비율 (1 : 1.414)
         int paperW = 125;
         int paperH = (int)Math.Round(paperW * 1.414);
 
@@ -167,18 +175,15 @@ public sealed class PageMarginDialog : Form
 
         var paperRect = new Rectangle(paperX, paperY, paperW, paperH);
 
-        // 종이 그림자
         using var shadowPen = new Pen(Color.FromArgb(50, 0, 0, 0), 1);
         g.DrawRectangle(shadowPen, paperX + 2, paperY + 2, paperW, paperH);
 
-        // 종이 본체 (흰색)
         using var brWhite = new SolidBrush(Color.White);
         g.FillRectangle(brWhite, paperRect);
 
         using var borderPen = new Pen(Color.FromArgb(148, 163, 184), 1);
         g.DrawRectangle(borderPen, paperRect);
 
-        // 여백 사각형 계산 (A4 가로 210mm, 세로 297mm 기준)
         float scaleX = paperW / 210f;
         float scaleY = paperH / 297f;
 
@@ -193,11 +198,9 @@ public sealed class PageMarginDialog : Form
             Math.Max(10, paperW - lm - rm),
             Math.Max(10, paperH - tm - bm));
 
-        // 여백 가이드 점선
         using var dotPen = new Pen(Color.FromArgb(56, 189, 248), 1) { DashStyle = DashStyle.Dash };
         g.DrawRectangle(dotPen, contentRect.X, contentRect.Y, contentRect.Width, contentRect.Height);
 
-        // 인쇄 가능 영역 연한 텍스트 라인 모의 표시
         using var textLinePen = new Pen(Color.FromArgb(203, 213, 225), 1);
         float lineY = contentRect.Y + 8;
         while (lineY < contentRect.Bottom - 8)

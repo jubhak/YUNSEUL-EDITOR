@@ -118,7 +118,7 @@ public partial class MainForm : Form
 
         bool textMode = _activeDocIndex < 0 || _activeDocIndex >= _documents.Count || !_documents[_activeDocIndex].IsLargeFile;
         _ruler.Visible = _showRuler && textMode;
-        _lineNumberPanel.Visible = _showLineNumbers && textMode;
+        _lineNumberPanel.Visible = _showLineNumbers && textMode && !_showA4View;
         SyncRuler();
         UpdateViewToggles();
     }
@@ -137,6 +137,7 @@ public partial class MainForm : Form
         _wrapBtn.Checked = _wordWrap;
         if (_a4ViewBtn != null) _a4ViewBtn.Checked = _showA4View;
         if (_miA4View != null) _miA4View.Checked = _showA4View;
+        if (_marginBtn != null) _marginBtn.Visible = _showA4View;
         ApplyA4Layout();
     }
 
@@ -1020,11 +1021,9 @@ public partial class MainForm : Form
     {
         if (ActiveEditor == null) return;
         using var preview = new PrintPreviewForm(ActiveEditor, _pageMargins);
-        if (preview.ShowDialog(this) == DialogResult.OK)
-        {
-            _pageMargins = preview.CurrentMargins;
-            ApplyViewSettings();
-        }
+        preview.ShowDialog(this);
+        _pageMargins = preview.CurrentMargins;
+        if (_showA4View) ApplyA4Layout();
     }
 
     private void OnDrawImage(object? sender, EventArgs e)
@@ -1040,13 +1039,25 @@ public partial class MainForm : Form
 
     private void OnPageMarginSetting(object? sender, EventArgs e)
     {
-        using var dlg = new PageMarginDialog(_pageMargins);
+        var originalMargins = _pageMargins;
+        using var dlg = new PageMarginDialog(_pageMargins, liveMargins =>
+        {
+            _pageMargins = liveMargins;
+            if (!_showA4View) _showA4View = true;
+            ApplyA4Layout();
+            UpdateViewToggles();
+        });
         if (dlg.ShowDialog(this) == DialogResult.OK)
         {
             _pageMargins = dlg.ResultMargins;
             _showA4View = true;
             ApplyViewSettings();
             _statusLabel.Text = $"용지 여백 변경됨: 좌 {_pageMargins.Left * 0.254:0}mm, 우 {_pageMargins.Right * 0.254:0}mm, 상 {_pageMargins.Top * 0.254:0}mm, 하 {_pageMargins.Bottom * 0.254:0}mm (A4 보기 켜짐)";
+        }
+        else
+        {
+            _pageMargins = originalMargins;
+            ApplyA4Layout();
         }
     }
 
@@ -1081,8 +1092,11 @@ public partial class MainForm : Form
                 _editorHost.Controls.Add(_a4PaperPanel);
             }
 
-            _lineNumberPanel.Parent = _a4PaperPanel;
-            _lineNumberPanel.Dock = DockStyle.Left;
+            _lineNumberPanel.Visible = false;
+            if (_lineNumberPanel.Parent != _editorHost)
+            {
+                _lineNumberPanel.Parent = _editorHost;
+            }
 
             if (curEditor != null)
             {
@@ -1103,6 +1117,7 @@ public partial class MainForm : Form
 
             _lineNumberPanel.Parent = _editorHost;
             _lineNumberPanel.Dock = DockStyle.Left;
+            _lineNumberPanel.Visible = _showLineNumbers && textMode;
 
             if (curEditor != null)
             {
