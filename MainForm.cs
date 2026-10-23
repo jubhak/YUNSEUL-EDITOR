@@ -27,6 +27,50 @@ public partial class MainForm : Form
     private bool _showA4View = false;
     private Margins _pageMargins = new(79, 79, 98, 98); // A4 기본 여백: 좌우 20mm, 상하 25mm (1/100인치)
     private readonly Panel _a4PaperPanel = new() { BackColor = Color.White };
+    private readonly HashSet<string> _a4SavedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private string _a4FilesConfigPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "YunseulMemo",
+        "a4_files.txt");
+
+    private void LoadA4SavedFiles()
+    {
+        try
+        {
+            if (File.Exists(_a4FilesConfigPath))
+            {
+                foreach (var line in File.ReadAllLines(_a4FilesConfigPath))
+                {
+                    var trimmed = line.Trim();
+                    if (!string.IsNullOrEmpty(trimmed))
+                        _a4SavedFiles.Add(trimmed);
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void SaveA4SavedFiles()
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(_a4FilesConfigPath);
+            if (dir != null && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllLines(_a4FilesConfigPath, _a4SavedFiles, new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    private void ToggleA4View()
+    {
+        _showA4View = !_showA4View;
+        if (_activeDocIndex >= 0 && _activeDocIndex < _documents.Count)
+        {
+            _documents[_activeDocIndex].IsA4View = _showA4View;
+        }
+        ApplyViewSettings();
+    }
+
     private bool _showRuler = true;
     private bool _showLineNumbers = true;
     private bool _showDirPane = true;
@@ -72,6 +116,7 @@ public partial class MainForm : Form
 
         _editorFont = PickEditorFont();
         LoadSettings();
+        LoadA4SavedFiles();
         InitializeComponent();
         _a4PaperPanel.Paint += A4PaperPanel_Paint;
         ApplyWindowSettings();
@@ -420,7 +465,8 @@ public partial class MainForm : Form
             Title = Path.GetFileName(path),
             FilePath = path,
             IsModified = false,
-            Editor = CreateEditor()
+            Editor = CreateEditor(),
+            IsA4View = _a4SavedFiles.Contains(path)
         };
 
         try
@@ -497,12 +543,14 @@ public partial class MainForm : Form
         if (_activeDocIndex >= 0 && _activeDocIndex < _documents.Count && _activeDocIndex != index)
         {
             var prev = _documents[_activeDocIndex];
+            prev.IsA4View = _showA4View;
             Control? pc = prev.IsLargeFile ? prev.LargeViewer : prev.Editor;
             if (pc != null && pc.Parent != null) pc.Visible = false;
         }
 
         _activeDocIndex = index;
         var doc = _documents[index];
+        _showA4View = doc.IsA4View;
 
         if (doc.IsLargeFile)
         {
@@ -974,6 +1022,14 @@ public partial class MainForm : Form
             doc.FilePath = path;
             doc.Title = Path.GetFileName(path);
             doc.IsModified = false;
+
+            // A4 모드로 저장된 문서 상태 보존
+            if (doc.IsA4View)
+                _a4SavedFiles.Add(path);
+            else
+                _a4SavedFiles.Remove(path);
+            SaveA4SavedFiles();
+
             AddRecent(path);
             UpdateTabTitle(index);
             if (index == _activeDocIndex) { UpdateTitle(); UpdateDocMeta(); }
@@ -1170,7 +1226,7 @@ public partial class MainForm : Form
         int printH = _a4PaperPanel.Height - pad.Top - pad.Bottom;
         if (printW > 20 && printH > 20)
         {
-            using var dotPen = new Pen(Color.FromArgb(120, 56, 189, 248), 1) { DashStyle = DashStyle.Dash };
+            using var dotPen = new Pen(Color.FromArgb(32, 71, 85, 105), 1) { DashStyle = DashStyle.Dash };
             g.DrawRectangle(dotPen, pad.Left - 1, pad.Top - 1, printW + 2, printH + 2);
         }
     }
@@ -1795,7 +1851,7 @@ public partial class MainForm : Form
             _showMainTool = Flag("ShowMainTool", _showMainTool);
             _showFormatTool = Flag("ShowFormatTool", _showFormatTool);
             _wordWrap = Flag("WordWrap", _wordWrap);
-            _showA4View = Flag("ShowA4View", _showA4View);
+            _showA4View = false; // 기본 화면은 일반 모드로 시작 (A4 저장 문서 열 때만 A4 모드)
             if (s.ContainsKey("MarginLeft"))
             {
                 _pageMargins = new Margins(
@@ -2211,6 +2267,9 @@ public class DocumentTab
 
     /// <summary>.html/.htm 파일을 소스 그대로 열어 편집 중인지 (true면 저장 시 변환 없이 원문 저장)</summary>
     public bool HtmlSource { get; set; }
+
+    /// <summary>A4 용지 보기 모드로 저장/편집 중인지 여부</summary>
+    public bool IsA4View { get; set; }
 
     /// <summary>북마크한 줄 번호 (0-based)</summary>
     public HashSet<int> Bookmarks { get; } = new();

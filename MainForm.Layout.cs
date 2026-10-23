@@ -248,7 +248,7 @@ public partial class MainForm
         view.DropDownItems.Add(_miWrap);
         view.DropDownItems.Add(new ToolStripSeparator());
         _miA4View = new ToolStripMenuItem("A4 용지 보기(&A)", Img(Ico.A4View)) { CheckOnClick = true };
-        _miA4View.Click += (_, _) => { _showA4View = _miA4View.Checked; ApplyViewSettings(); };
+        _miA4View.Click += (_, _) => ToggleA4View();
         view.DropDownItems.Add(_miA4View);
         view.DropDownItems.Add(Mi("용지 여백 설정(&M)...", Keys.None, OnPageMarginSetting, Ico.Margin));
         view.DropDownItems.Add(new ToolStripSeparator());
@@ -379,7 +379,7 @@ public partial class MainForm
         _lineNumBtn = TB("줄 번호 표시", Ico.LineNumber, (_, _) => { _showLineNumbers = !_showLineNumbers; ApplyViewSettings(); });
         _rulerBtn = TB("눈금자 표시", Ico.Ruler, (_, _) => { _showRuler = !_showRuler; ApplyViewSettings(); });
         t.Add(_wrapBtn); t.Add(_lineNumBtn); t.Add(_rulerBtn);
-        _a4ViewBtn = TB("A4 용지 보기", Ico.A4View, (_, _) => { _showA4View = !_showA4View; ApplyViewSettings(); });
+        _a4ViewBtn = TB("A4 용지 보기", Ico.A4View, (_, _) => ToggleA4View());
         _a4ViewBtn.CheckOnClick = true;
         _marginBtn = TB("용지 여백 설정", Ico.Margin, OnPageMarginSetting);
         _marginBtn.Visible = _showA4View;
