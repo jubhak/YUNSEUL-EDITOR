@@ -10,6 +10,7 @@
     <RootNamespace>YunseulMemo</RootNamespace>
     <AssemblyName>YUNSEUL-EDITOR</AssemblyName>
     <Version>1.2.0</Version>
+    <ApplicationIcon>app_icon.ico</ApplicationIcon>
   </PropertyGroup>
 
 </Project>
