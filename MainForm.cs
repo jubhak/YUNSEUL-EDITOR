@@ -657,24 +657,56 @@ public partial class MainForm : Form
         }
     }
 
-    /// <summary>문서를 닫습니다. 저장 확인에서 취소하면 false.</summary>
+    /// <summary>문서에 저장되지 않은 신규 입력 또는 수정된 내용이 있는지 확인합니다.</summary>
+    private static bool HasUnsavedChanges(DocumentTab doc)
+    {
+        if (doc.IsLargeFile) return false;
+
+        // 신규 문서(저장된 파일 경로가 없는 문서)
+        if (string.IsNullOrEmpty(doc.FilePath))
+        {
+            // 아무 내용도 입력되지 않았거나 공백만 있는 경우 그냥 닫기 대상
+            if (doc.Editor == null || doc.Editor.TextLength == 0 || string.IsNullOrWhiteSpace(doc.Editor.Text))
+                return false;
+
+            return true;
+        }
+
+        // 기존 파일인 경우 수정 플래그 확인
+        return doc.IsModified;
+    }
+
+    /// <summary>문서를 닫습니다. 저장 확인에서 닫지 않기(취소)하면 false를 반환합니다.</summary>
     private bool CloseDocument(int index)
     {
         if (index < 0 || index >= _documents.Count) return false;
 
         var doc = _documents[index];
-        if (doc.IsModified)
+        if (HasUnsavedChanges(doc))
         {
+            // 사용자가 내용을 직접 보고 판단할 수 있도록 해당 탭으로 전환
             SwitchToDocument(index);
-            var result = MessageBox.Show(
-                $"'{doc.Title}'의 변경 내용을 저장하시겠습니까?",
-                _appTitle, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
 
-            if (result == DialogResult.Cancel) return false;
-            if (result == DialogResult.Yes)
+            bool isNewDoc = string.IsNullOrEmpty(doc.FilePath);
+            using var dlg = new CloseConfirmDialog(doc.Title, isNewDoc);
+            dlg.ShowDialog(this);
+
+            switch (dlg.SelectedAction)
             {
-                SaveByIndex(index);
-                if (doc.IsModified) return false; // 저장이 취소됨
+                case CloseConfirmDialog.ConfirmAction.SaveAndClose:
+                    SaveByIndex(index);
+                    // 파일 저장이 취소되었거나 여전히 미저장 상태이면 닫기 중단
+                    if (HasUnsavedChanges(doc)) return false;
+                    break;
+
+                case CloseConfirmDialog.ConfirmAction.DiscardAndClose:
+                    // 무시하고 닫기: 저장하지 않고 즉시 닫기 진행
+                    break;
+
+                case CloseConfirmDialog.ConfirmAction.Cancel:
+                default:
+                    // 닫지 않기: 전체 닫기 중단
+                    return false;
             }
         }
 
@@ -985,19 +1017,26 @@ public partial class MainForm : Form
     {
         for (int i = _documents.Count - 1; i >= 0; i--)
         {
-            if (_documents[i].IsModified)
+            if (i >= _documents.Count) continue;
+            var doc = _documents[i];
+            if (HasUnsavedChanges(doc))
             {
                 SwitchToDocument(i);
-                var result = MessageBox.Show(
-                    $"'{_documents[i].Title}'의 변경 내용을 저장하시겠습니까?",
-                    _appTitle, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                bool isNewDoc = string.IsNullOrEmpty(doc.FilePath);
+                using var dlg = new CloseConfirmDialog(doc.Title, isNewDoc);
+                dlg.ShowDialog(this);
 
-                if (result == DialogResult.Cancel) { e.Cancel = true; return; }
-                if (result == DialogResult.Yes)
+                if (dlg.SelectedAction == CloseConfirmDialog.ConfirmAction.SaveAndClose)
                 {
                     SaveByIndex(i);
-                    if (_documents[i].IsModified) { e.Cancel = true; return; }
+                    if (HasUnsavedChanges(doc)) { e.Cancel = true; return; }
                 }
+                else if (dlg.SelectedAction == CloseConfirmDialog.ConfirmAction.Cancel)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+                // DiscardAndClose인 경우 저장하지 않고 다음 문서 확인 계속
             }
         }
 
