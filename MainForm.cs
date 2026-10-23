@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Drawing.Drawing2D;
+using System.Drawing.Printing;
 using System.Drawing.Text;
 using System.Globalization;
 using System.Text;
@@ -22,6 +24,9 @@ public partial class MainForm : Form
     // 설정
     private Font _editorFont = null!;
     private bool _wordWrap = true;
+    private bool _showA4View = false;
+    private Margins _pageMargins = new(79, 79, 98, 98); // A4 기본 여백: 좌우 20mm, 상하 25mm (1/100인치)
+    private readonly Panel _a4PaperPanel = new() { BackColor = Color.White };
     private bool _showRuler = true;
     private bool _showLineNumbers = true;
     private bool _showDirPane = true;
@@ -68,6 +73,7 @@ public partial class MainForm : Form
         _editorFont = PickEditorFont();
         LoadSettings();
         InitializeComponent();
+        _a4PaperPanel.Paint += A4PaperPanel_Paint;
         ApplyWindowSettings();
         ApplyViewSettings();
         InitContextMenus();
@@ -129,6 +135,9 @@ public partial class MainForm : Form
         _rulerBtn.Checked = _showRuler;
         _lineNumBtn.Checked = _showLineNumbers;
         _wrapBtn.Checked = _wordWrap;
+        if (_a4ViewBtn != null) _a4ViewBtn.Checked = _showA4View;
+        if (_miA4View != null) _miA4View.Checked = _showA4View;
+        ApplyA4Layout();
     }
 
     private void OnToggleWordWrap(object? sender, EventArgs e)
@@ -520,6 +529,7 @@ public partial class MainForm : Form
         }
 
         SyncRuler();
+        ApplyA4Layout();
         _docTabs.SelectedIndex = index;
 
         UpdateTitle();
@@ -570,6 +580,8 @@ public partial class MainForm : Form
             new ToolStripSeparator(),
             _miEditTableProps,
             miInsertTable,
+            new ToolStripSeparator(),
+            new ToolStripMenuItem("그림 그리기(&D)...", null, OnDrawImage),
             new ToolStripSeparator(),
             new ToolStripMenuItem("글꼴 서식(&F)...", null, OnEditorFontSetting)
         });
@@ -1007,8 +1019,145 @@ public partial class MainForm : Form
     private void OnPrint(object? sender, EventArgs e)
     {
         if (ActiveEditor == null) return;
-        using var preview = new PrintPreviewForm(ActiveEditor);
-        preview.ShowDialog(this);
+        using var preview = new PrintPreviewForm(ActiveEditor, _pageMargins);
+        if (preview.ShowDialog(this) == DialogResult.OK)
+        {
+            _pageMargins = preview.CurrentMargins;
+            ApplyViewSettings();
+        }
+    }
+
+    private void OnDrawImage(object? sender, EventArgs e)
+    {
+        if (ActiveEditor == null) return;
+        using var dlg = new DrawingDialog();
+        if (dlg.ShowDialog(this) == DialogResult.OK && dlg.ResultImage != null)
+        {
+            InsertImageAtOriginalSize(dlg.ResultImage);
+            _statusLabel.Text = $"그림 삽입됨 ({dlg.ResultImage.Width}×{dlg.ResultImage.Height})";
+        }
+    }
+
+    private void OnPageMarginSetting(object? sender, EventArgs e)
+    {
+        using var dlg = new PageMarginDialog(_pageMargins);
+        if (dlg.ShowDialog(this) == DialogResult.OK)
+        {
+            _pageMargins = dlg.ResultMargins;
+            _showA4View = true;
+            ApplyViewSettings();
+            _statusLabel.Text = $"용지 여백 변경됨: 좌 {_pageMargins.Left * 0.254:0}mm, 우 {_pageMargins.Right * 0.254:0}mm, 상 {_pageMargins.Top * 0.254:0}mm, 하 {_pageMargins.Bottom * 0.254:0}mm (A4 보기 켜짐)";
+        }
+    }
+
+    /// <summary>
+    /// A4 용지 레이아웃 모드와 일반 전체화면 에디터 모드를 전환하고 여백을 반영합니다.
+    /// A4 뷰 모드일 때는 인쇄 출력 너비(MarginBounds)와 화면 에디터 폭이 100% 동일하게 일치합니다.
+    /// </summary>
+    private void ApplyA4Layout()
+    {
+        if (_editorHost == null) return;
+
+        bool textMode = _activeDocIndex >= 0 && _activeDocIndex < _documents.Count && !_documents[_activeDocIndex].IsLargeFile;
+        var curEditor = ActiveEditor;
+
+        if (_showA4View && textMode)
+        {
+            _editorHost.AutoScroll = true;
+            _editorHost.BackColor = Color.FromArgb(232, 235, 240); // 데스크톱 슬레이트 회색
+
+            // 1/100인치 단위 여백을 96 DPI 화면 픽셀로 환산
+            int leftPx = S((int)Math.Round(_pageMargins.Left * 96.0 / 100.0));
+            int rightPx = S((int)Math.Round(_pageMargins.Right * 96.0 / 100.0));
+            int topPx = S((int)Math.Round(_pageMargins.Top * 96.0 / 100.0));
+            int bottomPx = S((int)Math.Round(_pageMargins.Bottom * 96.0 / 100.0));
+
+            _a4PaperPanel.Padding = new Padding(leftPx, topPx, rightPx, bottomPx);
+
+            LayoutA4Paper();
+
+            if (_a4PaperPanel.Parent != _editorHost)
+            {
+                _editorHost.Controls.Add(_a4PaperPanel);
+            }
+
+            _lineNumberPanel.Parent = _a4PaperPanel;
+            _lineNumberPanel.Dock = DockStyle.Left;
+
+            if (curEditor != null)
+            {
+                curEditor.Parent = _a4PaperPanel;
+                curEditor.Dock = DockStyle.Fill;
+                curEditor.BringToFront();
+            }
+        }
+        else
+        {
+            _editorHost.AutoScroll = false;
+            _editorHost.BackColor = Color.White;
+
+            if (_a4PaperPanel.Parent == _editorHost)
+            {
+                _editorHost.Controls.Remove(_a4PaperPanel);
+            }
+
+            _lineNumberPanel.Parent = _editorHost;
+            _lineNumberPanel.Dock = DockStyle.Left;
+
+            if (curEditor != null)
+            {
+                curEditor.Parent = _editorHost;
+                curEditor.Dock = DockStyle.Fill;
+                curEditor.BringToFront();
+            }
+        }
+
+        SyncRuler();
+        _a4PaperPanel.Invalidate();
+        _editorHost.Invalidate();
+    }
+
+    private void LayoutA4Paper()
+    {
+        if (!_showA4View || _editorHost == null) return;
+
+        // A4 규격 폭 (210mm = 8.27인치 = 794px @ 96 DPI)
+        int a4Width = S(794);
+        int a4MinHeight = S(1123); // 297mm = 11.69인치 = 1123px @ 96 DPI
+
+        int availableH = _editorHost.ClientSize.Height - S(40);
+        int paperHeight = Math.Max(a4MinHeight, availableH);
+
+        _a4PaperPanel.Size = new Size(a4Width, paperHeight);
+        int paperX = Math.Max(S(20), (_editorHost.ClientSize.Width - a4Width) / 2);
+        _a4PaperPanel.Location = new Point(paperX, S(20));
+    }
+
+    private void A4PaperPanel_Paint(object? sender, PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        // 종이 둘레 부드러운 드롭 섀도우 효과
+        for (int i = 1; i <= 4; i++)
+        {
+            using var shadowPen = new Pen(Color.FromArgb(12 * (5 - i), 0, 0, 0), 1);
+            g.DrawRectangle(shadowPen, i, i, _a4PaperPanel.Width - 1, _a4PaperPanel.Height - 1);
+        }
+
+        // 종이 본체 테두리
+        using var borderPen = new Pen(Color.FromArgb(203, 213, 225), 1);
+        g.DrawRectangle(borderPen, 0, 0, _a4PaperPanel.Width - 1, _a4PaperPanel.Height - 1);
+
+        // 여백 가이드 점선 (A4 보기에서 인쇄 가능 영역을 시각적으로 안내)
+        var pad = _a4PaperPanel.Padding;
+        int printW = _a4PaperPanel.Width - pad.Left - pad.Right;
+        int printH = _a4PaperPanel.Height - pad.Top - pad.Bottom;
+        if (printW > 20 && printH > 20)
+        {
+            using var dotPen = new Pen(Color.FromArgb(120, 56, 189, 248), 1) { DashStyle = DashStyle.Dash };
+            g.DrawRectangle(dotPen, pad.Left - 1, pad.Top - 1, printW + 2, printH + 2);
+        }
     }
 
     private void OnExit(object? sender, EventArgs e) => Close();
@@ -1591,6 +1740,11 @@ public partial class MainForm : Form
                 $"ShowMainTool={(_showMainTool ? 1 : 0)}",
                 $"ShowFormatTool={(_showFormatTool ? 1 : 0)}",
                 $"WordWrap={(_wordWrap ? 1 : 0)}",
+                $"ShowA4View={(_showA4View ? 1 : 0)}",
+                $"MarginLeft={_pageMargins.Left}",
+                $"MarginRight={_pageMargins.Right}",
+                $"MarginTop={_pageMargins.Top}",
+                $"MarginBottom={_pageMargins.Bottom}",
                 $"EditorFont={_editorFont.Name}|{_editorFont.Size.ToString(CultureInfo.InvariantCulture)}"
             };
             if (_lastSplitter > 0) lines.Add($"SplitterDistance={_lastSplitter}");
@@ -1626,6 +1780,15 @@ public partial class MainForm : Form
             _showMainTool = Flag("ShowMainTool", _showMainTool);
             _showFormatTool = Flag("ShowFormatTool", _showFormatTool);
             _wordWrap = Flag("WordWrap", _wordWrap);
+            _showA4View = Flag("ShowA4View", _showA4View);
+            if (s.ContainsKey("MarginLeft"))
+            {
+                _pageMargins = new Margins(
+                    Num("MarginLeft", _pageMargins.Left),
+                    Num("MarginRight", _pageMargins.Right),
+                    Num("MarginTop", _pageMargins.Top),
+                    Num("MarginBottom", _pageMargins.Bottom));
+            }
 
             if (s.TryGetValue("EditorFont", out var ef))
             {

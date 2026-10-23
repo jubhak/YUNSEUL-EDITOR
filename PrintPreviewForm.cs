@@ -3,35 +3,52 @@ using System.Drawing.Printing;
 namespace YunseulMemo;
 
 /// <summary>
-/// 인쇄 미리보기 폼. 여백 조정 기능 포함.
+/// 인쇄 미리보기 폼. 여백 조정 및 A4 출력 최적화 포함.
 /// </summary>
 public class PrintPreviewForm : Form
 {
-    private PrintDocument _printDoc;
+    private readonly PrintDocument _printDoc;
     private PrintPreviewControl _previewControl = null!;
     private NumericUpDown _marginTop = null!;
     private NumericUpDown _marginBottom = null!;
     private NumericUpDown _marginLeft = null!;
     private NumericUpDown _marginRight = null!;
-    private RichTextBox _editor;
+    private readonly RichTextBox _editor;
     private int _charIndex;
 
-    public PrintPreviewForm(RichTextBox editor)
+    public Margins CurrentMargins => _printDoc.DefaultPageSettings.Margins;
+
+    public PrintPreviewForm(RichTextBox editor, Margins? initialMargins = null)
     {
         _editor = editor;
         _printDoc = new PrintDocument();
+
+        // A4 용지 기본 설정
+        try
+        {
+            foreach (PaperSize ps in _printDoc.PrinterSettings.PaperSizes)
+            {
+                if (ps.Kind == PaperKind.A4)
+                {
+                    _printDoc.DefaultPageSettings.PaperSize = ps;
+                    break;
+                }
+            }
+        }
+        catch { }
+
         _printDoc.PrintPage += PrintDoc_PrintPage;
 
-        Text = "인쇄 미리보기";
-        Size = new Size(900, 700);
+        Text = "인쇄 미리보기 (A4 용지 기준)";
+        Size = new Size(920, 720);
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = false;
 
-        BuildUI();
+        BuildUI(initialMargins);
         UpdatePreview();
     }
 
-    private void BuildUI()
+    private void BuildUI(Margins? init)
     {
         // Top panel with margin controls and buttons
         var topPanel = new Panel
@@ -42,31 +59,36 @@ public class PrintPreviewForm : Form
             BackColor = SystemColors.Control
         };
 
+        int topVal = init?.Top ?? 98;
+        int botVal = init?.Bottom ?? 98;
+        int leftVal = init?.Left ?? 79;
+        int rightVal = init?.Right ?? 79;
+
         int x = 10;
         topPanel.Controls.Add(new Label { Text = "위쪽:", Location = new Point(x, 15), AutoSize = true });
         x += 40;
-        _marginTop = new NumericUpDown { Location = new Point(x, 12), Width = 55, Minimum = 0, Maximum = 300, Value = 100, DecimalPlaces = 0 };
+        _marginTop = new NumericUpDown { Location = new Point(x, 12), Width = 55, Minimum = 0, Maximum = 300, Value = Math.Clamp(topVal, 0, 300), DecimalPlaces = 0 };
         _marginTop.ValueChanged += Margin_Changed;
         topPanel.Controls.Add(_marginTop);
 
         x += 65;
         topPanel.Controls.Add(new Label { Text = "아래:", Location = new Point(x, 15), AutoSize = true });
         x += 40;
-        _marginBottom = new NumericUpDown { Location = new Point(x, 12), Width = 55, Minimum = 0, Maximum = 300, Value = 100, DecimalPlaces = 0 };
+        _marginBottom = new NumericUpDown { Location = new Point(x, 12), Width = 55, Minimum = 0, Maximum = 300, Value = Math.Clamp(botVal, 0, 300), DecimalPlaces = 0 };
         _marginBottom.ValueChanged += Margin_Changed;
         topPanel.Controls.Add(_marginBottom);
 
         x += 65;
         topPanel.Controls.Add(new Label { Text = "왼쪽:", Location = new Point(x, 15), AutoSize = true });
         x += 40;
-        _marginLeft = new NumericUpDown { Location = new Point(x, 12), Width = 55, Minimum = 0, Maximum = 300, Value = 100, DecimalPlaces = 0 };
+        _marginLeft = new NumericUpDown { Location = new Point(x, 12), Width = 55, Minimum = 0, Maximum = 300, Value = Math.Clamp(leftVal, 0, 300), DecimalPlaces = 0 };
         _marginLeft.ValueChanged += Margin_Changed;
         topPanel.Controls.Add(_marginLeft);
 
         x += 65;
         topPanel.Controls.Add(new Label { Text = "오른쪽:", Location = new Point(x, 15), AutoSize = true });
         x += 45;
-        _marginRight = new NumericUpDown { Location = new Point(x, 12), Width = 55, Minimum = 0, Maximum = 300, Value = 100, DecimalPlaces = 0 };
+        _marginRight = new NumericUpDown { Location = new Point(x, 12), Width = 55, Minimum = 0, Maximum = 300, Value = Math.Clamp(rightVal, 0, 300), DecimalPlaces = 0 };
         _marginRight.ValueChanged += Margin_Changed;
         topPanel.Controls.Add(_marginRight);
 

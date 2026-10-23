@@ -9,7 +9,8 @@ internal enum Ico
     Find, Replace, GoTo, WordWrap, LineNumber, Ruler, Bookmark,
     Bold, Italic, Underline, Strike, TextColor, BackColor,
     AlignLeft, AlignCenter, AlignRight, Bullet, Indent, Outdent,
-    Image, ClipImage, Link, HRule, Table, Page, Folder, FolderOpen
+    Image, ClipImage, Link, HRule, Table, Page, Folder, FolderOpen,
+    Draw, A4View, Margin
 }
 
 /// <summary>
@@ -254,6 +255,29 @@ internal static class ToolIcons
                     g.DrawRectangle(pen, 1.5f, 2.5f, 13, 11);
                     g.DrawLine(pen, 1.5f, 5.5f, 14.5f, 5.5f); g.DrawLine(pen, 1.5f, 9, 14.5f, 9);
                     g.DrawLine(pen, 6, 2.5f, 6, 13.5f); g.DrawLine(pen, 10.5f, 2.5f, 10.5f, 13.5f);
+                }
+                break;
+            case Ico.Draw:
+                using (var br = B(Color.FromArgb(240, 240, 245))) g.FillEllipse(br, 1.5f, 2f, 13, 11);
+                using (var pen = P(Color.FromArgb(60, 60, 80), 1.2f)) g.DrawEllipse(pen, 1.5f, 2f, 13, 11);
+                using (var brR = B(Color.FromArgb(239, 68, 68))) g.FillEllipse(brR, 4f, 4f, 2.5f, 2.5f);
+                using (var brB = B(Color.FromArgb(59, 130, 246))) g.FillEllipse(brB, 8f, 3.5f, 2.5f, 2.5f);
+                using (var brY = B(Color.FromArgb(245, 158, 11))) g.FillEllipse(brY, 11f, 6.5f, 2.5f, 2.5f);
+                using (var penBrush = P(Color.FromArgb(180, 83, 9), 2f)) g.DrawLine(penBrush, 8.5f, 13.5f, 14.5f, 7.5f);
+                break;
+            case Ico.A4View:
+                Page(g, 2.5f, 1, 11, 14, Color.FromArgb(59, 130, 246));
+                using (var pen = P(Color.FromArgb(148, 163, 184), 0.8f))
+                {
+                    g.DrawRectangle(pen, 4.5f, 3.5f, 7f, 9f);
+                }
+                break;
+            case Ico.Margin:
+                Page(g, 2.5f, 1, 11, 14);
+                using (var dotPen = P(Color.FromArgb(56, 189, 248), 0.8f))
+                {
+                    dotPen.DashStyle = DashStyle.Dash;
+                    g.DrawRectangle(dotPen, 4.5f, 3.5f, 7f, 9f);
                 }
                 break;
         }

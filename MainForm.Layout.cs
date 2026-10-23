@@ -58,6 +58,10 @@ public partial class MainForm
     private ToolStripButton _wrapBtn = null!;
     private ToolStripButton _lineNumBtn = null!;
     private ToolStripButton _rulerBtn = null!;
+    private ToolStripButton _a4ViewBtn = null!;
+    private ToolStripButton _marginBtn = null!;
+    private ToolStripButton _drawBtn = null!;
+    private ToolStripMenuItem _miA4View = null!;
     private ToolStripMenuItem _miWrap = null!, _miRuler = null!, _miLineNum = null!, _miDirPane = null!;
     private ToolStripMenuItem _miStatusBar = null!, _miMainTool = null!, _miFormatTool = null!;
     private ToolStripMenuItem _recentMenu = null!, _windowMenu = null!, _docMenu = null!;
@@ -196,6 +200,7 @@ public partial class MainForm
         file.DropDownItems.Add(Mi("모두 저장(&V)", Keys.None, OnSaveAll, Ico.SaveAll));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(Mi("인쇄(&P)...", Keys.Control | Keys.P, OnPrint, Ico.Print));
+        file.DropDownItems.Add(Mi("용지 여백 설정(&M)...", Keys.None, OnPageMarginSetting, Ico.Margin));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(Mi("끝내기(&X)", Keys.Alt | Keys.F4, OnExit));
         _menuStrip.Items.Add(file);
@@ -241,6 +246,11 @@ public partial class MainForm
         _miWrap = new ToolStripMenuItem("자동 줄 바꿈(&W)", Img(Ico.WordWrap)) { CheckOnClick = true, ShortcutKeys = Keys.Control | Keys.Shift | Keys.W };
         _miWrap.Click += OnToggleWordWrap;
         view.DropDownItems.Add(_miWrap);
+        view.DropDownItems.Add(new ToolStripSeparator());
+        _miA4View = new ToolStripMenuItem("A4 용지 보기(&A)", Img(Ico.A4View)) { CheckOnClick = true };
+        _miA4View.Click += (_, _) => { _showA4View = _miA4View.Checked; ApplyViewSettings(); };
+        view.DropDownItems.Add(_miA4View);
+        view.DropDownItems.Add(Mi("용지 여백 설정(&M)...", Keys.None, OnPageMarginSetting, Ico.Margin));
         view.DropDownItems.Add(new ToolStripSeparator());
         view.DropDownItems.Add(Mi("편집창 글꼴 설정(&F)...", Keys.None, OnEditorFontSetting));
         _menuStrip.Items.Add(view);
@@ -295,6 +305,7 @@ public partial class MainForm
         var insert = new ToolStripMenuItem("삽입(&I)");
         insert.DropDownItems.Add(Mi("이미지 파일 삽입...", Keys.None, OnInsertImageFile, Ico.Image));
         insert.DropDownItems.Add(Mi("클립보드 이미지 붙여넣기", Keys.Control | Keys.Shift | Keys.V, OnPasteClipboardImage, Ico.ClipImage));
+        insert.DropDownItems.Add(Mi("그림 그리기(&D)...", Keys.Control | Keys.Shift | Keys.D, OnDrawImage, Ico.Draw));
         insert.DropDownItems.Add(new ToolStripSeparator());
         insert.DropDownItems.Add(Mi("하이퍼링크 삽입...", Keys.Control | Keys.K, OnInsertLink, Ico.Link));
         insert.DropDownItems.Add(Mi("수평선 삽입", Keys.None, OnInsertHorizontalRule, Ico.HRule));
@@ -368,7 +379,14 @@ public partial class MainForm
         _lineNumBtn = TB("줄 번호 표시", Ico.LineNumber, (_, _) => { _showLineNumbers = !_showLineNumbers; ApplyViewSettings(); });
         _rulerBtn = TB("눈금자 표시", Ico.Ruler, (_, _) => { _showRuler = !_showRuler; ApplyViewSettings(); });
         t.Add(_wrapBtn); t.Add(_lineNumBtn); t.Add(_rulerBtn);
+        _a4ViewBtn = TB("A4 용지 보기", Ico.A4View, (_, _) => { _showA4View = !_showA4View; ApplyViewSettings(); });
+        _a4ViewBtn.CheckOnClick = true;
+        _marginBtn = TB("용지 여백 설정", Ico.Margin, OnPageMarginSetting);
+        t.Add(_a4ViewBtn);
+        t.Add(_marginBtn);
         t.Add(new ToolStripSeparator());
+        _drawBtn = TB("그림 그리기", Ico.Draw, OnDrawImage);
+        t.Add(_drawBtn);
         t.Add(TB("이미지 파일 삽입", Ico.Image, OnInsertImageFile));
         t.Add(TB("클립보드 이미지 붙여넣기 (Ctrl+Shift+V)", Ico.ClipImage, OnPasteClipboardImage));
     }
@@ -585,7 +603,7 @@ public partial class MainForm
         _editorHost.Controls.Add(_lineNumberPanel);
         _lineNumberPanel.SizeChanged += (_, _) => SyncRuler();
         _lineNumberPanel.VisibleChanged += (_, _) => SyncRuler();
-        _editorHost.SizeChanged += (_, _) => SyncRuler();
+        _editorHost.SizeChanged += (_, _) => { SyncRuler(); LayoutA4Paper(); };
 
         var area = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = Padding.Empty };
         area.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
