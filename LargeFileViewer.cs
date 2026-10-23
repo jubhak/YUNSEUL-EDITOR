@@ -22,13 +22,14 @@ public class LargeFileViewer : Control
     private Brush _lineNumBrush = new SolidBrush(Color.FromArgb(120, 120, 120));
     private Brush _currentLineBrush = new SolidBrush(Color.FromArgb(30, 30, 140));
     private Brush _bgBrush = Brushes.White;
-    private Brush _lineNumBg = new SolidBrush(Color.FromArgb(250, 250, 248));
-    private Pen _borderPen = new Pen(Color.FromArgb(200, 200, 195));
+    private Brush _lineNumBg = new SolidBrush(Color.FromArgb(238, 238, 238));
+    private Pen _borderPen = new Pen(Color.FromArgb(170, 170, 170));
 
     private int _lineHeight;
     private int _lineNumWidth = 60;
     private int _currentLine; // 클릭으로 선택한 줄
-    private Encoding _encoding = Encoding.UTF8;
+    private TextEnc _enc = TextEnc.Utf8;
+    private Encoding _encoding = new UTF8Encoding(false);
 
     // 캐시: 최근 읽은 줄 블록
     private int _cacheStart = -1;
@@ -36,6 +37,8 @@ public class LargeFileViewer : Control
     private const int CacheBlockSize = 500;
 
     public int TotalLines => _totalLines;
+    /// <summary>파일 앞부분으로 감지한 인코딩 (BOM → 유효한 UTF-8 → ANSI).</summary>
+    public TextEnc DetectedEncoding => _enc;
     public int CurrentLine => _currentLine;
     public bool IsLoaded => _filePath != null && _totalLines > 0;
 
@@ -43,7 +46,7 @@ public class LargeFileViewer : Control
     {
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.Selectable, true);
-        _font = new Font("Consolas", 11f);
+        _font = new Font("Consolas", 10f);
         _markerFont = new Font("맑은 고딕", 7f);
         _lineHeight = _font.Height + 2;
         BackColor = Color.White;
@@ -76,7 +79,8 @@ public class LargeFileViewer : Control
         _cacheLines = Array.Empty<string>();
 
         // 인코딩 감지 (BOM 확인)
-        _encoding = DetectEncoding(path);
+        _enc = TextFileHelper.DetectEncoding(path);
+        _encoding = TextFileHelper.GetEncoding(_enc);
 
         // 줄 오프셋 인덱싱
         IndexLines(path);
@@ -86,28 +90,12 @@ public class LargeFileViewer : Control
         Invalidate();
     }
 
-    private Encoding DetectEncoding(string path)
-    {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        byte[] bom = new byte[4];
-        int read = fs.Read(bom, 0, 4);
-
-        if (read >= 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
-            return Encoding.UTF8;
-        if (read >= 2 && bom[0] == 0xFF && bom[1] == 0xFE)
-            return Encoding.Unicode;
-        if (read >= 2 && bom[0] == 0xFE && bom[1] == 0xFF)
-            return Encoding.BigEndianUnicode;
-
-        return Encoding.UTF8;
-    }
-
     private void IndexLines(string path)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024);
 
         // BOM 건너뛰기
-        int bomSize = GetBomSize(_encoding);
+        int bomSize = GetBomSize(_enc);
         if (bomSize > 0) fs.Seek(bomSize, SeekOrigin.Begin);
 
         _lineOffsets.Add(fs.Position);
@@ -122,7 +110,7 @@ public class LargeFileViewer : Control
             {
                 if (buffer[i] == (byte)'\n')
                 {
-                    _lineOffsets.Add(position + i + 1);
+                    _lineOffsets.Add(position + i + 1 + (_enc == TextEnc.Utf16Le ? 1 : 0));
                 }
             }
             position += bytesRead;
@@ -133,12 +121,12 @@ public class LargeFileViewer : Control
             _lineOffsets.RemoveAt(_lineOffsets.Count - 1);
     }
 
-    private int GetBomSize(Encoding enc)
+    private static int GetBomSize(TextEnc enc) => enc switch
     {
-        if (enc == Encoding.UTF8) return 3;
-        if (enc == Encoding.Unicode || enc == Encoding.BigEndianUnicode) return 2;
-        return 0;
-    }
+        TextEnc.Utf8Bom => 3,
+        TextEnc.Utf16Le or TextEnc.Utf16Be => 2,
+        _ => 0
+    };
 
     /// <summary>
     /// 지정된 줄 범위의 텍스트를 파일에서 읽어옵니다.

@@ -1,333 +1,165 @@
-using System.Text;
+using System.Diagnostics;
 using System.Drawing.Text;
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace YunseulMemo;
 
 public partial class MainForm : Form
 {
+    private const string _appName = "윤슬 에디터";
+    private readonly string _appTitle = "윤슬 에디터 v1.2";
 
-    private string _appTitle = "윤슬 에디터 v1.1";
-
-    // Layout
-    private MenuStrip _menuStrip = null!;
-    private ToolStrip _mainToolStrip = null!;
-    private ToolStrip _formatToolStrip = null!;
-    private SplitContainer _splitContainer = null!;
-    private Panel _editorPanel = null!;
-    private StatusStrip _statusStrip = null!;
-    private ToolStripStatusLabel _statusLabel = null!;
-    private ToolStripStatusLabel _wordCountLabel = null!;
-    private ToolStripStatusLabel _lineColLabel = null!;
-    private ToolStripStatusLabel _encodingLabel = null!;
-
-    // File Browser (left panel)
-    private ComboBox _driveCombo = null!;
-    private TreeView _folderTree = null!;
-    private ListBox _fileList = null!;
-    private ComboBox _filterCombo = null!;
-
-    // Tab bar (bottom of editor area, above status bar)
-    private TabControl _tabBar = null!;
-
-    // Find/Replace
-    private Panel _findPanel = null!;
-    private TextBox _findTextBox = null!;
-    private TextBox _replaceTextBox = null!;
-
-    // Format toolbar controls
-    private ToolStripComboBox _fontFamilyCombo = null!;
-    private ToolStripComboBox _fontSizeCombo = null!;
-    private ToolStripComboBox _paragraphCombo = null!;
-    private ToolStripButton _boldBtn = null!;
-    private ToolStripButton _italicBtn = null!;
-    private ToolStripButton _underlineBtn = null!;
-    private ToolStripButton _strikeBtn = null!;
-    private ToolStripButton _alignLeftBtn = null!;
-    private ToolStripButton _alignCenterBtn = null!;
-    private ToolStripButton _alignRightBtn = null!;
-    private ToolStripButton _bulletListBtn = null!;
-    private ToolStripButton _indentBtn = null!;
-    private ToolStripButton _outdentBtn = null!;
-    private ToolStripButton _textColorBtn = null!;
-    private ToolStripButton _bgColorBtn = null!;
-
-    private Color _currentTextColor = Color.Black;
-    private Color _currentBgColor = Color.Yellow;
-
-    private const RichTextBoxFinds FindOptions = RichTextBoxFinds.None;
-
-    // Line number panel
-    private LineNumberPanel _lineNumberPanel = null!;
-
-    // Multi-document support
-    private List<DocumentTab> _documents = new();
+    // 멀티 문서
+    private readonly List<DocumentTab> _documents = new();
     private int _activeDocIndex = -1;
     private int _untitledCounter = 0;
 
     private string _currentBrowsePath = "";
-    private string _settingsPath = "";
+    private readonly string _settingsPath;
 
-    // A4 page outline panel
-    private Panel _pageOutlinePanel = null!;
+    // 설정
+    private Font _editorFont = null!;
+    private bool _wordWrap = true;
+    private bool _showRuler = true;
+    private bool _showLineNumbers = true;
+    private bool _showDirPane = true;
+    private bool _showStatusBar = true;
+    private bool _showMainTool = true;
+    private bool _showFormatTool = true;
+    private readonly List<string> _recentFiles = new();
+    private readonly List<string> _clipItems = new();
+    private bool _clipLoaded;
+    private Rectangle? _pendingBounds;
+    private FormWindowState? _pendingState;
+    private int _pendingSplitterDistance = -1;
+    private int _lastSplitter = -1;
 
-    public MainForm()
+    // 상태 플래그
+    private bool _updatingToolbar;
+    private bool _suppressModified;
+    private readonly System.Windows.Forms.Timer _countTimer = new() { Interval = 250 };
+
+    private FindReplaceForm? _findForm;
+
+    private static readonly string[] DefaultClips =
+    {
+        "$(DATE)", "$(TIME)", "$(DATETIME)",
+        "────────────────────────────────────────",
+        "========================================",
+        "TODO: ", "※ "
+    };
+
+    public MainForm(string[]? startupFiles = null)
     {
         _settingsPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "YunseulMemo", "settings.ini");
-        InitializeComponent();
+
+        _editorFont = PickEditorFont();
         LoadSettings();
-        // Start with one empty document
+        InitializeComponent();
+        ApplyWindowSettings();
+        ApplyViewSettings();
+
+        _splitContainer.SplitterMoved += (_, _) =>
+        {
+            if (!_splitContainer.Panel1Collapsed) _lastSplitter = _splitContainer.SplitterDistance;
+        };
+        _countTimer.Tick += (_, _) => { _countTimer.Stop(); UpdateWordCount(); UpdateCursorPosition(); };
+
         NewDocument();
-    }
 
-    private void InitializeComponent()
-    {
-        SuspendLayout();
-
-        Text = _appTitle;
-        Size = new Size(1100, 750);
-        StartPosition = FormStartPosition.CenterScreen;
-        Icon = SystemIcons.Application;
-        KeyPreview = true;
-        KeyDown += MainForm_KeyDown;
-        Load += MainForm_Load;
-
-        // Menu
-        _menuStrip = new MenuStrip();
-        BuildMenu();
-        Controls.Add(_menuStrip);
-        MainMenuStrip = _menuStrip;
-
-        // Main Toolbar
-        _mainToolStrip = new ToolStrip
+        if (startupFiles != null)
         {
-            ImageScalingSize = new Size(24, 24),
-            Font = new Font("Segoe UI Emoji", 14f),
-            AutoSize = true
-        };
-        BuildMainToolStrip();
-        Controls.Add(_mainToolStrip);
-
-        // Format Toolbar
-        _formatToolStrip = new ToolStrip
-        {
-            ImageScalingSize = new Size(24, 24),
-            Font = new Font("맑은 고딕", 11f),
-            AutoSize = true
-        };
-        BuildFormatToolStrip();
-        Controls.Add(_formatToolStrip);
-
-        // Find Panel
-        BuildFindPanel();
-        Controls.Add(_findPanel);
-
-        // Status Strip
-        _statusStrip = new StatusStrip();
-        _statusLabel = new ToolStripStatusLabel("준비") { Spring = true, TextAlign = System.Drawing.ContentAlignment.MiddleLeft };
-        _wordCountLabel = new ToolStripStatusLabel("0 단어 | 0 자");
-        _lineColLabel = new ToolStripStatusLabel("줄: 1, 열: 1");
-        _encodingLabel = new ToolStripStatusLabel("UTF-8");
-        _statusStrip.Items.AddRange(new ToolStripItem[] { _statusLabel, _wordCountLabel, _lineColLabel, _encodingLabel });
-        Controls.Add(_statusStrip);
-
-        // Main split: left = file browser, right = editor + tabs
-        _splitContainer = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Vertical,
-            SplitterDistance = 200,
-            SplitterWidth = 6,
-            FixedPanel = FixedPanel.None,
-            BorderStyle = BorderStyle.None,
-            BackColor = Color.FromArgb(220, 220, 215)
-        };
-        _splitContainer.Paint += SplitContainer_Paint;
-
-        // Left panel: file browser
-        BuildFileBrowser();
-
-        // Right panel: tab bar at bottom + editor area
-        _editorPanel = new Panel { Dock = DockStyle.Fill };
-
-        // 에디터 상단 구분선 (드라이브 선택 아래 선과 동일)
-        var editorTopSeparator = new Panel
-        {
-            Dock = DockStyle.Top,
-            Height = 1,
-            BackColor = Color.FromArgb(180, 180, 175)
-        };
-
-        // A4 page outline panel (contains the editor with page-like appearance)
-        _pageOutlinePanel = new Panel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(245, 245, 242), // 배경 (용지 바깥)
-            Padding = new Padding(0, 0, 0, 0)
-        };
-        _pageOutlinePanel.Paint += PageOutlinePanel_Paint;
-
-        // Line number panel (left side of editor) - 편집창과 자연스럽게 연결
-        _lineNumberPanel = new LineNumberPanel
-        {
-            Dock = DockStyle.Left,
-            Width = 52
-        };
-        _pageOutlinePanel.Controls.Add(_lineNumberPanel);
-
-        _editorPanel.Controls.Add(_pageOutlinePanel);
-        _pageOutlinePanel.BringToFront();
-        _editorPanel.Controls.Add(editorTopSeparator);
-        editorTopSeparator.BringToFront();
-
-        _tabBar = new TabControl
-        {
-            Dock = DockStyle.Bottom,
-            Height = 28,
-            Alignment = TabAlignment.Bottom,
-            SizeMode = TabSizeMode.Fixed,
-            ItemSize = new Size(150, 22),
-            DrawMode = TabDrawMode.OwnerDrawFixed,
-            Font = new Font("맑은 고딕", 9f),
-            Padding = new Point(12, 3)
-        };
-        _tabBar.DrawItem += TabBar_DrawItem;
-        _tabBar.SelectedIndexChanged += TabBar_SelectedIndexChanged;
-        _tabBar.MouseDown += TabBar_MouseDown;
-        _tabBar.Paint += (s, pe) =>
-        {
-            // 탭바 상단에 1px 선만 그리기
-            using var pen = new Pen(Color.FromArgb(180, 180, 175), 1f);
-            pe.Graphics.DrawLine(pen, 0, 0, _tabBar.Width, 0);
-        };
-
-        _editorPanel.Controls.Add(_tabBar);
-        _splitContainer.Panel2.Controls.Add(_editorPanel);
-
-        Controls.Add(_splitContainer);
-        _splitContainer.BringToFront();
-
-        ResumeLayout(false);
-        PerformLayout();
-    }
-
-    #region File Browser
-
-    private void BuildFileBrowser()
-    {
-        var browserPanel = new Panel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = Color.White
-        };
-
-        // Drive selector
-        _driveCombo = new ComboBox
-        {
-            Dock = DockStyle.Top,
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            Height = 24,
-            Font = new Font("맑은 고딕", 9f),
-            FlatStyle = FlatStyle.Flat
-        };
-        foreach (var drive in DriveInfo.GetDrives())
-        {
-            if (drive.IsReady)
-                _driveCombo.Items.Add(drive.Name);
+            foreach (var f in startupFiles)
+            {
+                try { if (File.Exists(f)) OpenFileInNewTab(Path.GetFullPath(f)); } catch { }
+            }
         }
-        if (_driveCombo.Items.Count > 0) _driveCombo.SelectedIndex = 0;
-        _driveCombo.SelectedIndexChanged += DriveCombo_Changed;
-
-        // 드라이브 선택 위 구분선
-        var driveTopSeparator = new Panel
-        {
-            Dock = DockStyle.Top,
-            Height = 1,
-            BackColor = Color.FromArgb(180, 180, 175)
-        };
-
-        // 드라이브 선택 아래 구분선 (30% 흐리게)
-        var driveSeparator = new Panel
-        {
-            Dock = DockStyle.Top,
-            Height = 1,
-            BackColor = Color.FromArgb(202, 202, 199)
-        };
-
-        // Folder tree (top half)
-        _folderTree = new TreeView
-        {
-            Dock = DockStyle.Fill,
-            ShowLines = true,
-            ShowPlusMinus = true,
-            ShowRootLines = false,
-            HideSelection = false,
-            BorderStyle = BorderStyle.None,
-            Font = new Font("맑은 고딕", 9.5f),
-            ItemHeight = 20,
-            BackColor = Color.White,
-            Indent = 15,
-            Margin = new Padding(0),
-            Padding = new Padding(0)
-        };
-        _folderTree.BeforeExpand += FolderTree_BeforeExpand;
-        _folderTree.AfterSelect += FolderTree_AfterSelect;
-
-        // File filter
-        _filterCombo = new ComboBox
-        {
-            Dock = DockStyle.Bottom,
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            Height = 24,
-            Font = new Font("맑은 고딕", 9f),
-            FlatStyle = FlatStyle.Flat
-        };
-        _filterCombo.Items.AddRange(new object[] { "All Files (*.*)", "텍스트 (*.txt)", "RTF (*.rtf)", "HTML (*.html;*.htm)" });
-        _filterCombo.SelectedIndex = 0;
-        _filterCombo.SelectedIndexChanged += (s, e) => RefreshFileList();
-
-        // File list (bottom half)
-        _fileList = new ListBox
-        {
-            Dock = DockStyle.Fill,
-            IntegralHeight = false,
-            BorderStyle = BorderStyle.None,
-            Font = new Font("맑은 고딕", 9.5f),
-            BackColor = Color.White
-        };
-        _fileList.DoubleClick += FileList_DoubleClick;
-
-        // Split folder tree and file list
-        var innerSplit = new SplitContainer
-        {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Horizontal,
-            SplitterDistance = 250,
-            SplitterWidth = 6,
-            BorderStyle = BorderStyle.None,
-            BackColor = Color.FromArgb(220, 220, 215)
-        };
-        innerSplit.Paint += SplitContainer_Paint;
-        innerSplit.Panel1.Padding = new Padding(0, 3, 0, 0);
-        innerSplit.Panel1.Controls.Add(_folderTree);
-        innerSplit.Panel2.Controls.Add(_fileList);
-        innerSplit.Panel2.Controls.Add(_filterCombo);
-
-        browserPanel.Controls.Add(innerSplit);
-        browserPanel.Controls.Add(driveSeparator);
-        browserPanel.Controls.Add(_driveCombo);
-        browserPanel.Controls.Add(driveTopSeparator);
-        // Dock=Top 순서: BringToFront가 나중인 게 위에 표시됨
-        driveSeparator.BringToFront();
-        _driveCombo.BringToFront();
-        driveTopSeparator.BringToFront();
-
-        _splitContainer.Panel1.Controls.Add(browserPanel);
-
-        // Initialize tree
-        LoadDriveTree();
     }
+
+    /// <summary>EditPlus처럼 고정폭 글꼴을 기본으로 사용합니다 (D2Coding → 굴림체 → Consolas → Courier New).</summary>
+    private static Font PickEditorFont()
+    {
+        string[] candidates = { "D2Coding", "굴림체", "GulimChe", "Consolas", "Courier New" };
+        using var ifc = new InstalledFontCollection();
+        var names = new HashSet<string>(ifc.Families.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var c in candidates)
+            if (names.Contains(c)) return new Font(c, 10f);
+        return new Font(FontFamily.GenericMonospace, 10f);
+    }
+
+    // ───────────────────────── 보기 설정 ─────────────────────────
+
+    private void ApplyViewSettings()
+    {
+        if (_menuStrip == null) return;
+        _mainToolStrip.Visible = _showMainTool;
+        _formatToolStrip.Visible = _showFormatTool;
+        _statusStrip.Visible = _showStatusBar;
+        _splitContainer.Panel1Collapsed = !_showDirPane;
+
+        bool textMode = _activeDocIndex < 0 || _activeDocIndex >= _documents.Count || !_documents[_activeDocIndex].IsLargeFile;
+        _ruler.Visible = _showRuler && textMode;
+        _lineNumberPanel.Visible = _showLineNumbers && textMode;
+        SyncRuler();
+        UpdateViewToggles();
+    }
+
+    private void UpdateViewToggles()
+    {
+        _miMainTool.Checked = _showMainTool;
+        _miFormatTool.Checked = _showFormatTool;
+        _miStatusBar.Checked = _showStatusBar;
+        _miDirPane.Checked = _showDirPane;
+        _miRuler.Checked = _showRuler;
+        _miLineNum.Checked = _showLineNumbers;
+        _miWrap.Checked = _wordWrap;
+        _rulerBtn.Checked = _showRuler;
+        _lineNumBtn.Checked = _showLineNumbers;
+        _wrapBtn.Checked = _wordWrap;
+    }
+
+    private void OnToggleWordWrap(object? sender, EventArgs e)
+    {
+        _wordWrap = !_wordWrap;
+        _suppressModified = true;
+        try
+        {
+            foreach (var d in _documents)
+                if (d.Editor != null) d.Editor.WordWrap = _wordWrap;
+        }
+        finally { _suppressModified = false; }
+        UpdateViewToggles();
+        _ruler.Invalidate();
+        _statusLabel.Text = _wordWrap ? "자동 줄 바꿈: 켜짐" : "자동 줄 바꿈: 꺼짐";
+    }
+
+    private void OnEditorFontSetting(object? sender, EventArgs e)
+    {
+        using var dlg = new FontDialog { Font = _editorFont, FontMustExist = true, ShowEffects = false };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        _editorFont = (Font)dlg.Font.Clone();
+        _lineNumberPanel.Font = _editorFont;
+        _suppressModified = true;
+        try
+        {
+            // 서식 있는 문서(RTF/이미지 포함)는 건드리지 않고, 일반 텍스트 문서에만 적용
+            foreach (var d in _documents)
+                if (d.Editor != null && !d.IsRich && !DocumentHasImages(d.Editor))
+                    d.Editor.Font = _editorFont;
+        }
+        finally { _suppressModified = false; }
+        _ruler.Invalidate();
+        _lineNumberPanel.Invalidate();
+        UpdateFormatToolbarState();
+        _statusLabel.Text = $"편집창 글꼴: {_editorFont.Name}, {_editorFont.Size:0.#}pt (새 문서와 일반 텍스트 문서에 적용)";
+    }
+
+    // ───────────────────────── 디렉토리 창 ─────────────────────────
 
     private void LoadDriveTree()
     {
@@ -335,16 +167,13 @@ public partial class MainForm : Form
         if (_driveCombo.SelectedItem == null) return;
 
         string drivePath = _driveCombo.SelectedItem.ToString()!;
-        var rootNode = new TreeNode(drivePath) { Tag = drivePath };
-        rootNode.Nodes.Add(""); // placeholder
+        var rootNode = new TreeNode(drivePath) { Tag = drivePath, ImageIndex = 0, SelectedImageIndex = 1 };
+        rootNode.Nodes.Add("");
         _folderTree.Nodes.Add(rootNode);
         rootNode.Expand();
     }
 
-    private void DriveCombo_Changed(object? sender, EventArgs e)
-    {
-        LoadDriveTree();
-    }
+    private void DriveCombo_Changed(object? sender, EventArgs e) => LoadDriveTree();
 
     private void FolderTree_BeforeExpand(object? sender, TreeViewCancelEventArgs e)
     {
@@ -356,27 +185,22 @@ public partial class MainForm : Form
             string path = node.Tag?.ToString() ?? "";
             try
             {
-                foreach (var dir in Directory.GetDirectories(path))
+                var dirs = Directory.GetDirectories(path);
+                Array.Sort(dirs, StringComparer.OrdinalIgnoreCase);
+                foreach (var dir in dirs)
                 {
                     string folderName = Path.GetFileName(dir);
-                    // 시스템 숨김 폴더 제외
-                    if (folderName.Equals("$Recycle.Bin", StringComparison.OrdinalIgnoreCase) ||
-                        folderName.Equals("$SysReset", StringComparison.OrdinalIgnoreCase) ||
-                        folderName.StartsWith("$") ||
-                        folderName.Contains("%"))
-                        continue;
+                    if (folderName.StartsWith("$") || folderName.Contains('%')) continue;
 
-                    // 숨김/시스템 속성 폴더 제외
                     try
                     {
                         var attrs = new DirectoryInfo(dir).Attributes;
-                        if (attrs.HasFlag(FileAttributes.Hidden) || attrs.HasFlag(FileAttributes.System))
-                            continue;
+                        if (attrs.HasFlag(FileAttributes.Hidden) || attrs.HasFlag(FileAttributes.System)) continue;
                     }
                     catch { continue; }
 
-                    var child = new TreeNode(folderName) { Tag = dir };
-                    child.Nodes.Add(""); // placeholder
+                    var child = new TreeNode(folderName) { Tag = dir, ImageIndex = 0, SelectedImageIndex = 1 };
+                    child.Nodes.Add("");
                     node.Nodes.Add(child);
                 }
             }
@@ -393,43 +217,139 @@ public partial class MainForm : Form
 
     private void RefreshFileList()
     {
-        _fileList.Items.Clear();
-        if (string.IsNullOrEmpty(_currentBrowsePath)) return;
-
-        string pattern = _filterCombo.SelectedIndex switch
-        {
-            1 => "*.txt",
-            2 => "*.rtf",
-            3 => "*.htm*",
-            _ => "*.*"
-        };
-
+        _fileList.BeginUpdate();
         try
         {
-            foreach (var file in Directory.GetFiles(_currentBrowsePath, pattern))
+            _fileList.Items.Clear();
+            if (string.IsNullOrEmpty(_currentBrowsePath)) return;
+
+            string pattern = _filterCombo.SelectedIndex switch
             {
-                _fileList.Items.Add(Path.GetFileName(file));
+                1 => "*.txt",
+                2 => "*.rtf",
+                3 => "*.htm*",
+                _ => "*.*"
+            };
+
+            try
+            {
+                var files = Directory.GetFiles(_currentBrowsePath, pattern);
+                Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+                foreach (var file in files)
+                {
+                    string ext = Path.GetExtension(file).ToLowerInvariant();
+                    int img = ext switch { ".rtf" => 1, ".html" or ".htm" => 2, _ => 0 };
+                    _fileList.Items.Add(new ListViewItem(Path.GetFileName(file), img));
+                }
             }
+            catch { }
         }
-        catch { }
+        finally { _fileList.EndUpdate(); }
     }
 
     private void FileList_DoubleClick(object? sender, EventArgs e)
     {
-        if (_fileList.SelectedItem == null) return;
-        string fileName = _fileList.SelectedItem.ToString()!;
-        string fullPath = Path.Combine(_currentBrowsePath, fileName);
+        if (_fileList.SelectedItems.Count == 0) return;
+        string fullPath = Path.Combine(_currentBrowsePath, _fileList.SelectedItems[0].Text);
         OpenFileInNewTab(fullPath);
     }
 
-    #endregion
+    // ───────────────────────── 클립텍스트 ─────────────────────────
 
-    #region Multi-Document / Tab Management
+    private static string ClipDisplay(string clip) => clip switch
+    {
+        "$(DATE)" => "[현재 날짜]",
+        "$(TIME)" => "[현재 시간]",
+        "$(DATETIME)" => "[현재 날짜 + 시간]",
+        _ => ClipPreview(clip)
+    };
+
+    private static string ClipPreview(string clip)
+    {
+        string s = clip.Replace("\r", "").Replace('\n', '↵');
+        return s.Length > 40 ? s.Substring(0, 40) + "…" : s;
+    }
+
+    private static string ResolveClip(string clip)
+    {
+        var now = DateTime.Now;
+        return clip
+            .Replace("$(DATETIME)", now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))
+            .Replace("$(DATE)", now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+            .Replace("$(TIME)", now.ToString("HH:mm:ss", CultureInfo.InvariantCulture));
+    }
+
+    private void RebuildClipList()
+    {
+        if (!_clipLoaded) { _clipItems.AddRange(DefaultClips); _clipLoaded = true; }
+        _clipList.Items.Clear();
+        foreach (var c in _clipItems) _clipList.Items.Add(ClipDisplay(c));
+    }
+
+    private void InsertSelectedClip()
+    {
+        int i = _clipList.SelectedIndex;
+        var ed = ActiveEditor;
+        if (i < 0 || i >= _clipItems.Count || ed == null) return;
+        ed.SelectedText = ResolveClip(_clipItems[i]).Replace("\r\n", "\n");
+        ed.Focus();
+    }
+
+    private void AddSelectionToClip()
+    {
+        var ed = ActiveEditor;
+        if (ed == null || ed.SelectedText.Length == 0) { _statusLabel.Text = "클립텍스트로 추가할 텍스트를 먼저 선택하세요."; return; }
+        _clipItems.Add(ed.SelectedText);
+        RebuildClipList();
+        _statusLabel.Text = "클립텍스트에 추가했습니다.";
+    }
+
+    private void RemoveSelectedClip()
+    {
+        int i = _clipList.SelectedIndex;
+        if (i < 0 || i >= _clipItems.Count) return;
+        _clipItems.RemoveAt(i);
+        RebuildClipList();
+    }
+
+    // ───────────────────────── 멀티 문서 / 탭 ─────────────────────────
 
     private DocumentTab ActiveDoc => _activeDocIndex >= 0 && _activeDocIndex < _documents.Count
         ? _documents[_activeDocIndex] : null!;
 
     private RichTextBox? ActiveEditor => ActiveDoc?.Editor;
+
+    private static Color? AccentFor(string? path)
+    {
+        string ext = Path.GetExtension(path ?? "").ToLowerInvariant();
+        return ext switch
+        {
+            ".rtf" or ".ymemo" => Color.FromArgb(60, 120, 210),
+            ".html" or ".htm" => Color.FromArgb(230, 120, 40),
+            _ => null
+        };
+    }
+
+    private static bool IsPristineUntitled(DocumentTab d) =>
+        d.FilePath == null && !d.IsModified && !d.IsLargeFile && d.Editor != null && d.Editor.TextLength == 0;
+
+    private void AddDocument(DocumentTab doc)
+    {
+        // EditPlus처럼: 아무것도 입력하지 않은 빈 새 문서 하나뿐일 때 파일을 열면 그 빈 문서를 대체합니다.
+        DocumentTab? replace = null;
+        if (doc.FilePath != null && _documents.Count == 1 && IsPristineUntitled(_documents[0]))
+            replace = _documents[0];
+
+        _documents.Add(doc);
+        _docTabs.AddTab(doc.Title, AccentFor(doc.FilePath), doc.FilePath ?? doc.Title);
+        SwitchToDocument(_documents.Count - 1);
+
+        if (replace != null)
+        {
+            int i = _documents.IndexOf(replace);
+            if (i >= 0) CloseDocument(i);
+        }
+    }
 
     private void NewDocument()
     {
@@ -439,12 +359,11 @@ public partial class MainForm : Form
             Title = $"제목 없음{_untitledCounter}",
             FilePath = null,
             IsModified = false,
-            Editor = CreateEditor()
+            Editor = CreateEditor(),
+            Encoding = TextEnc.Utf8Bom,
+            Eol = EolKind.Pc
         };
-        _documents.Add(doc);
-        var tab = new TabPage(doc.Title);
-        _tabBar.TabPages.Add(tab);
-        SwitchToDocument(_documents.Count - 1);
+        AddDocument(doc);
     }
 
     private void OpenFileInNewTab(string path)
@@ -460,14 +379,18 @@ public partial class MainForm : Form
             }
         }
 
-        // 대용량 파일 판별 (5MB 이상 텍스트 파일)
         const long LargeFileThreshold = 5 * 1024 * 1024;
-        var fileInfo = new FileInfo(path);
+        FileInfo fileInfo;
+        try { fileInfo = new FileInfo(path); if (!fileInfo.Exists) throw new FileNotFoundException(path); }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"파일을 열 수 없습니다.\n{ex.Message}", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
         string ext = Path.GetExtension(path).ToLowerInvariant();
         bool isTextFile = ext is ".txt" or ".log" or ".csv" or ".tsv" or ".sql" or ".json" or ".xml" or ".md" or "";
-        bool useLargeMode = fileInfo.Length > LargeFileThreshold && isTextFile;
-
-        if (useLargeMode)
+        if (fileInfo.Length > LargeFileThreshold && isTextFile)
         {
             OpenLargeFile(path);
             return;
@@ -487,38 +410,39 @@ public partial class MainForm : Form
             {
                 case ".rtf":
                     doc.Editor.LoadFile(path, RichTextBoxStreamType.RichText);
+                    doc.IsRich = true;
                     break;
                 case ".ymemo":
-                    // 하위 호환: 기존 ymemo 파일도 열 수 있음
                     LoadYmemoInto(doc.Editor, path);
+                    doc.IsRich = true;
                     break;
                 default:
-                    doc.Editor.Text = File.ReadAllText(path, Encoding.UTF8);
+                {
+                    var (text, enc, eol) = TextFileHelper.Read(path);
+                    doc.Encoding = enc;
+                    doc.Eol = eol;
+                    doc.HtmlSource = ext is ".html" or ".htm";
+                    doc.Editor.Text = text;
                     break;
+                }
             }
             doc.IsModified = false;
         }
         catch (Exception ex)
         {
+            doc.Editor.Dispose();
             MessageBox.Show($"파일을 열 수 없습니다.\n{ex.Message}", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
-        _documents.Add(doc);
-        var tab = new TabPage(doc.Title);
-        _tabBar.TabPages.Add(tab);
-        SwitchToDocument(_documents.Count - 1);
+        AddRecent(path);
+        AddDocument(doc);
         _statusLabel.Text = $"열림: {path}";
     }
 
     private void OpenLargeFile(string path)
     {
-        var viewer = new LargeFileViewer
-        {
-            Dock = DockStyle.Fill,
-            Visible = false
-        };
-
+        var viewer = new LargeFileViewer { Dock = DockStyle.Fill, Visible = false };
         try
         {
             viewer.LoadFile(path);
@@ -535,13 +459,12 @@ public partial class MainForm : Form
             Title = Path.GetFileName(path),
             FilePath = path,
             IsModified = false,
-            LargeViewer = viewer
+            LargeViewer = viewer,
+            Encoding = viewer.DetectedEncoding
         };
 
-        _documents.Add(doc);
-        var tab = new TabPage(doc.Title);
-        _tabBar.TabPages.Add(tab);
-        SwitchToDocument(_documents.Count - 1);
+        AddRecent(path);
+        AddDocument(doc);
 
         long sizeMB = new FileInfo(path).Length / (1024 * 1024);
         _statusLabel.Text = $"대용량 모드로 열림: {path} ({sizeMB}MB, {viewer.TotalLines:N0}줄)";
@@ -552,19 +475,11 @@ public partial class MainForm : Form
         if (index < 0 || index >= _documents.Count) return;
 
         // 이전 문서 숨기기
-        if (_activeDocIndex >= 0 && _activeDocIndex < _documents.Count)
+        if (_activeDocIndex >= 0 && _activeDocIndex < _documents.Count && _activeDocIndex != index)
         {
             var prev = _documents[_activeDocIndex];
-            if (prev.IsLargeFile)
-            {
-                if (prev.LargeViewer?.Parent != null)
-                    prev.LargeViewer.Visible = false;
-            }
-            else if (prev.Editor != null)
-            {
-                if (prev.Editor.Parent != null)
-                    prev.Editor.Visible = false;
-            }
+            Control? pc = prev.IsLargeFile ? prev.LargeViewer : prev.Editor;
+            if (pc != null && pc.Parent != null) pc.Visible = false;
         }
 
         _activeDocIndex = index;
@@ -572,89 +487,149 @@ public partial class MainForm : Form
 
         if (doc.IsLargeFile)
         {
-            // 대용량 뷰어 표시
-            if (doc.LargeViewer!.Parent == null)
-            {
-                doc.LargeViewer.Dock = DockStyle.Fill;
-                _pageOutlinePanel.Controls.Add(doc.LargeViewer);
-                doc.LargeViewer.BringToFront();
-            }
-            doc.LargeViewer.Visible = true;
-            doc.LargeViewer.BringToFront();
-            doc.LargeViewer.Focus();
+            var v = doc.LargeViewer!;
+            if (v.Parent == null) { v.Dock = DockStyle.Fill; _editorHost.Controls.Add(v); }
+            v.Visible = true;
+            v.BringToFront();
+            v.Focus();
             _lineNumberPanel.DetachEditor();
+            _ruler.AttachEditor(null);
             _lineNumberPanel.Visible = false;
+            _ruler.Visible = false;
         }
         else if (doc.Editor != null)
         {
-            if (doc.Editor.Parent == null)
-            {
-                doc.Editor.Dock = DockStyle.Fill;
-                _pageOutlinePanel.Controls.Add(doc.Editor);
-                doc.Editor.BringToFront();
-            }
-            doc.Editor.Visible = true;
-            doc.Editor.BringToFront();
-            doc.Editor.Focus();
-            _lineNumberPanel.Visible = true;
-            _lineNumberPanel.AttachEditor(doc.Editor);
+            var ed = doc.Editor;
+            if (ed.Parent == null) { ed.Dock = DockStyle.Fill; _editorHost.Controls.Add(ed); }
+            ed.Visible = true;
+            ed.BringToFront();
+            ed.Focus();
+            _lineNumberPanel.AttachEditor(ed, doc.Bookmarks);
+            _ruler.AttachEditor(ed);
+            _lineNumberPanel.Visible = _showLineNumbers;
+            _ruler.Visible = _showRuler;
         }
 
-        // 탭 선택 동기화
-        if (_tabBar.SelectedIndex != index)
-            _tabBar.SelectedIndex = index;
+        SyncRuler();
+        _docTabs.SelectedIndex = index;
 
         UpdateTitle();
         UpdateWordCount();
         UpdateCursorPosition();
+        UpdateDocMeta();
+        UpdateFormatToolbarState();
+        UpdateViewToggles();
     }
 
-    private void CloseDocument(int index)
+    private void DocTabs_SelectedIndexChanged(object? sender, EventArgs e)
     {
-        if (index < 0 || index >= _documents.Count) return;
+        int i = _docTabs.SelectedIndex;
+        if (i >= 0 && i != _activeDocIndex) SwitchToDocument(i);
+    }
+
+    private void DocTabs_TabMoved(object? sender, (int From, int To) a)
+    {
+        if (a.From < 0 || a.From >= _documents.Count || a.To < 0 || a.To >= _documents.Count) return;
+        var d = _documents[a.From];
+        _documents.RemoveAt(a.From);
+        _documents.Insert(a.To, d);
+        _activeDocIndex = _docTabs.SelectedIndex;
+    }
+
+    private void DocTabs_ContextRequested(object? sender, (int Index, Point Location) a)
+    {
+        if (a.Index < 0 || a.Index >= _documents.Count) return;
+        var doc = _documents[a.Index];
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("닫기", null, (_, _) => CloseDocument(_documents.IndexOf(doc)));
+        menu.Items.Add("다른 문서 모두 닫기", null, (_, _) => CloseOthers(doc));
+        menu.Items.Add(new ToolStripSeparator());
+        var copyPath = new ToolStripMenuItem("경로 복사", null, (_, _) => { try { Clipboard.SetText(doc.FilePath!); } catch { } }) { Enabled = doc.FilePath != null };
+        var openFolder = new ToolStripMenuItem("탐색기에서 폴더 열기", null, (_, _) =>
+        {
+            try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{doc.FilePath}\"") { UseShellExecute = true }); } catch { }
+        }) { Enabled = doc.FilePath != null };
+        menu.Items.Add(copyPath);
+        menu.Items.Add(openFolder);
+        menu.Closed += (_, _) => menu.Dispose();
+        menu.Show(_docTabs, a.Location);
+    }
+
+    private void CycleDocument(int step)
+    {
+        if (_documents.Count < 2) return;
+        int n = (_activeDocIndex + step + _documents.Count) % _documents.Count;
+        SwitchToDocument(n);
+    }
+
+    private void CloseOthers(DocumentTab keep)
+    {
+        foreach (var d in _documents.ToList())
+        {
+            if (d == keep) continue;
+            int i = _documents.IndexOf(d);
+            if (i < 0) continue;
+            if (!CloseDocument(i)) break;
+        }
+    }
+
+    /// <summary>문서를 닫습니다. 저장 확인에서 취소하면 false.</summary>
+    private bool CloseDocument(int index)
+    {
+        if (index < 0 || index >= _documents.Count) return false;
 
         var doc = _documents[index];
         if (doc.IsModified)
         {
+            SwitchToDocument(index);
             var result = MessageBox.Show(
                 $"'{doc.Title}'의 변경 내용을 저장하시겠습니까?",
                 _appTitle, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
 
-            if (result == DialogResult.Cancel) return;
+            if (result == DialogResult.Cancel) return false;
             if (result == DialogResult.Yes)
             {
-                _activeDocIndex = index;
-                OnSave(null, EventArgs.Empty);
-                if (doc.IsModified) return; // save was cancelled
+                SaveByIndex(index);
+                if (doc.IsModified) return false; // 저장이 취소됨
             }
         }
 
-        // 에디터/뷰어 제거
+        bool wasActive = index == _activeDocIndex;
+        if (wasActive)
+        {
+            _lineNumberPanel.DetachEditor();
+            _ruler.AttachEditor(null);
+        }
+
         if (doc.IsLargeFile)
         {
-            if (doc.LargeViewer?.Parent != null)
-                _pageOutlinePanel.Controls.Remove(doc.LargeViewer);
+            if (doc.LargeViewer?.Parent != null) _editorHost.Controls.Remove(doc.LargeViewer);
             doc.LargeViewer?.Dispose();
         }
         else if (doc.Editor != null)
         {
-            if (doc.Editor.Parent != null)
-                _pageOutlinePanel.Controls.Remove(doc.Editor);
+            if (doc.Editor.Parent != null) _editorHost.Controls.Remove(doc.Editor);
             doc.Editor.Dispose();
         }
 
         _documents.RemoveAt(index);
-        _tabBar.TabPages.RemoveAt(index);
+        _docTabs.RemoveTabAt(index);
 
         if (_documents.Count == 0)
         {
+            _activeDocIndex = -1;
             NewDocument();
         }
-        else
+        else if (wasActive)
         {
-            int newIndex = Math.Min(index, _documents.Count - 1);
-            SwitchToDocument(newIndex);
+            _activeDocIndex = -1;
+            SwitchToDocument(Math.Min(index, _documents.Count - 1));
         }
+        else if (index < _activeDocIndex)
+        {
+            _activeDocIndex--;
+        }
+        return true;
     }
 
     private RichTextBox CreateEditor()
@@ -663,22 +638,26 @@ public partial class MainForm : Form
         {
             Dock = DockStyle.Fill,
             AcceptsTab = true,
-            Font = new Font("맑은 고딕", 12f),
+            Font = _editorFont,
             ScrollBars = RichTextBoxScrollBars.Both,
-            WordWrap = true,
+            WordWrap = _wordWrap,
             EnableAutoDragDrop = true,
             Visible = false,
             AllowDrop = true,
-            BorderStyle = BorderStyle.None
+            BorderStyle = BorderStyle.None,
+            HideSelection = false,
+            BackColor = Color.White,
+            ForeColor = Color.Black
         };
-        rtb.Margin = new Padding(0, 0, 10, 0);
         rtb.TextChanged += Editor_TextChanged;
         rtb.SelectionChanged += Editor_SelectionChanged;
         rtb.KeyDown += Editor_KeyDown;
+        rtb.MouseDown += Editor_MouseDown;
+        rtb.DragEnter += Files_DragEnter;
+        rtb.DragDrop += Files_DragDrop;
 
         // Ctrl+V (WM_PASTE)를 가로채서 이미지+텍스트 혼합 붙여넣기 지원
         rtb.CustomPasteHandler = () => HandleCustomPaste(rtb);
-
         return rtb;
     }
 
@@ -703,7 +682,6 @@ public partial class MainForm : Form
             }
             return true;
         }
-        // HTML이나 텍스트는 기본 paste에 맡김
         return false;
     }
 
@@ -712,350 +690,27 @@ public partial class MainForm : Form
         if (index < 0 || index >= _documents.Count) return;
         var doc = _documents[index];
         string title = doc.FilePath != null ? Path.GetFileName(doc.FilePath) : doc.Title;
-        string prefix = doc.IsModified ? "*" : "";
-        _tabBar.TabPages[index].Text = $"{prefix}{title}";
+        _docTabs.SetTab(index, title, doc.IsModified, AccentFor(doc.FilePath), doc.FilePath ?? doc.Title);
     }
 
-    private void TabBar_SelectedIndexChanged(object? sender, EventArgs e)
+    // ───────────────────────── 드래그 & 드롭 ─────────────────────────
+
+    private void Files_DragEnter(object? sender, DragEventArgs e)
     {
-        if (_tabBar.SelectedIndex >= 0 && _tabBar.SelectedIndex != _activeDocIndex)
+        if (e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop))
+            e.Effect = DragDropEffects.Copy;
+    }
+
+    private void Files_DragDrop(object? sender, DragEventArgs e)
+    {
+        if (e.Data?.GetData(DataFormats.FileDrop) is not string[] files) return;
+        foreach (var f in files)
         {
-            SwitchToDocument(_tabBar.SelectedIndex);
+            if (File.Exists(f)) OpenFileInNewTab(f);
         }
     }
 
-    private void TabBar_MouseDown(object? sender, MouseEventArgs e)
-    {
-        for (int i = 0; i < _tabBar.TabCount; i++)
-        {
-            var tabRect = _tabBar.GetTabRect(i);
-
-            // Close button area: 14x14 box at the right side of the tab
-            var closeRect = new Rectangle(
-                tabRect.Right - 18, tabRect.Top + (tabRect.Height - 14) / 2, 14, 14);
-
-            if (closeRect.Contains(e.Location) && e.Button == MouseButtons.Left)
-            {
-                CloseDocument(i);
-                return;
-            }
-        }
-
-        // Middle-click to close tab
-        if (e.Button == MouseButtons.Middle)
-        {
-            for (int i = 0; i < _tabBar.TabCount; i++)
-            {
-                if (_tabBar.GetTabRect(i).Contains(e.Location))
-                {
-                    CloseDocument(i);
-                    break;
-                }
-            }
-        }
-    }
-
-    private void TabBar_DrawItem(object? sender, DrawItemEventArgs e)
-    {
-        if (e.Index < 0 || e.Index >= _tabBar.TabCount) return;
-
-        var tabRect = _tabBar.GetTabRect(e.Index);
-        bool isSelected = (_tabBar.SelectedIndex == e.Index);
-
-        // Background
-        using var bgBrush = new SolidBrush(isSelected ? Color.White : Color.FromArgb(240, 240, 238));
-        e.Graphics.FillRectangle(bgBrush, tabRect);
-
-        // Tab text
-        string tabText = _tabBar.TabPages[e.Index].Text;
-        using var textBrush = new SolidBrush(isSelected ? Color.Black : Color.FromArgb(80, 80, 80));
-        using var textFont = new Font("맑은 고딕", 9f, isSelected ? FontStyle.Bold : FontStyle.Regular);
-        var textRect = new Rectangle(tabRect.Left + 6, tabRect.Top + 3, tabRect.Width - 26, tabRect.Height - 4);
-        using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            e.Graphics.DrawString(tabText, textFont, textBrush, textRect, sf);
-
-        // Close button (X)
-        var closeRect = new Rectangle(tabRect.Right - 18, tabRect.Top + (tabRect.Height - 14) / 2, 14, 14);
-        using var closeBrush = new SolidBrush(Color.FromArgb(120, 120, 120));
-        using var closeFont = new Font("맑은 고딕", 8f, FontStyle.Bold);
-        e.Graphics.DrawString("✕", closeFont, closeBrush, closeRect.Left, closeRect.Top);
-
-        // Bottom border for unselected tabs
-        if (!isSelected)
-        {
-            using var borderPen = new Pen(Color.FromArgb(200, 200, 195));
-            e.Graphics.DrawLine(borderPen, tabRect.Left, tabRect.Bottom - 1, tabRect.Right, tabRect.Bottom - 1);
-        }
-    }
-
-    #endregion
-
-    #region Menu
-
-    private void BuildMenu()
-    {
-        var fileMenu = new ToolStripMenuItem("파일(&F)");
-        fileMenu.DropDownItems.Add(CreateMenuItem("새로 만들기(&N)", Keys.Control | Keys.N, OnNew));
-        fileMenu.DropDownItems.Add(CreateMenuItem("열기(&O)...", Keys.Control | Keys.O, OnOpen));
-        fileMenu.DropDownItems.Add(new ToolStripSeparator());
-        fileMenu.DropDownItems.Add(CreateMenuItem("저장(&S)", Keys.Control | Keys.S, OnSave));
-        fileMenu.DropDownItems.Add(CreateMenuItem("다른 이름으로 저장(&A)...", Keys.Control | Keys.Shift | Keys.S, OnSaveAs));
-        fileMenu.DropDownItems.Add(new ToolStripSeparator());
-        fileMenu.DropDownItems.Add(CreateMenuItem("닫기(&W)", Keys.Control | Keys.W, OnCloseTab));
-        fileMenu.DropDownItems.Add(new ToolStripSeparator());
-        fileMenu.DropDownItems.Add(CreateMenuItem("인쇄(&P)...", Keys.Control | Keys.P, OnPrint));
-        fileMenu.DropDownItems.Add(new ToolStripSeparator());
-        fileMenu.DropDownItems.Add(CreateMenuItem("끝내기(&X)", Keys.Alt | Keys.F4, OnExit));
-        _menuStrip.Items.Add(fileMenu);
-
-        var editMenu = new ToolStripMenuItem("편집(&E)");
-        editMenu.DropDownItems.Add(CreateMenuItem("실행 취소(&U)", Keys.Control | Keys.Z, OnUndo));
-        editMenu.DropDownItems.Add(CreateMenuItem("다시 실행(&R)", Keys.Control | Keys.Y, OnRedo));
-        editMenu.DropDownItems.Add(new ToolStripSeparator());
-        editMenu.DropDownItems.Add(CreateMenuItem("잘라내기(&T)", Keys.Control | Keys.X, OnCut));
-        editMenu.DropDownItems.Add(CreateMenuItem("복사(&C)", Keys.Control | Keys.C, OnCopy));
-        editMenu.DropDownItems.Add(CreateMenuItem("붙여넣기(&P)", Keys.Control | Keys.V, OnPaste));
-        editMenu.DropDownItems.Add(new ToolStripSeparator());
-        editMenu.DropDownItems.Add(CreateMenuItem("모두 선택(&A)", Keys.Control | Keys.A, OnSelectAll));
-        editMenu.DropDownItems.Add(new ToolStripSeparator());
-        editMenu.DropDownItems.Add(CreateMenuItem("찾기/바꾸기(&F)...", Keys.Control | Keys.H, OnToggleFind));
-        _menuStrip.Items.Add(editMenu);
-
-        var insertMenu = new ToolStripMenuItem("삽입(&I)");
-        insertMenu.DropDownItems.Add(CreateMenuItem("이미지 파일 삽입...", Keys.None, OnInsertImageFile));
-        insertMenu.DropDownItems.Add(CreateMenuItem("클립보드 이미지 붙여넣기", Keys.Control | Keys.Shift | Keys.V, OnPasteClipboardImage));
-        insertMenu.DropDownItems.Add(new ToolStripSeparator());
-        insertMenu.DropDownItems.Add(CreateMenuItem("하이퍼링크 삽입...", Keys.Control | Keys.K, OnInsertLink));
-        insertMenu.DropDownItems.Add(CreateMenuItem("수평선 삽입", Keys.None, OnInsertHorizontalRule));
-        insertMenu.DropDownItems.Add(CreateMenuItem("표 삽입...", Keys.None, OnInsertTable));
-        _menuStrip.Items.Add(insertMenu);
-
-        var formatMenu = new ToolStripMenuItem("서식(&O)");
-        formatMenu.DropDownItems.Add(CreateMenuItem("굵게(&B)", Keys.Control | Keys.B, OnBold));
-        formatMenu.DropDownItems.Add(CreateMenuItem("기울임(&I)", Keys.Control | Keys.I, OnItalic));
-        formatMenu.DropDownItems.Add(CreateMenuItem("밑줄(&U)", Keys.Control | Keys.U, OnUnderline));
-        formatMenu.DropDownItems.Add(CreateMenuItem("취소선", Keys.None, OnStrikethrough));
-        formatMenu.DropDownItems.Add(new ToolStripSeparator());
-        formatMenu.DropDownItems.Add(CreateMenuItem("글꼴(&F)...", Keys.None, OnFont));
-        formatMenu.DropDownItems.Add(CreateMenuItem("글자 색상...", Keys.None, OnTextColor));
-        formatMenu.DropDownItems.Add(CreateMenuItem("배경 색상...", Keys.None, OnBackColor));
-        formatMenu.DropDownItems.Add(new ToolStripSeparator());
-        formatMenu.DropDownItems.Add(CreateMenuItem("자동 줄 바꿈(&W)", Keys.None, OnToggleWordWrap));
-        _menuStrip.Items.Add(formatMenu);
-
-        var helpMenu = new ToolStripMenuItem("도움말(&H)");
-        helpMenu.DropDownItems.Add(CreateMenuItem("정보(&A)", Keys.None, OnAbout));
-        _menuStrip.Items.Add(helpMenu);
-    }
-
-    #endregion
-
-    #region Toolbars
-
-    private void BuildMainToolStrip()
-    {
-        _mainToolStrip.Items.Add(CreateToolButton("새로 만들기", "📄", OnNew));
-        _mainToolStrip.Items.Add(CreateToolButton("열기", "📂", OnOpen));
-        _mainToolStrip.Items.Add(CreateToolButton("저장", "💾", OnSave));
-        _mainToolStrip.Items.Add(new ToolStripSeparator());
-        _mainToolStrip.Items.Add(CreateToolButton("잘라내기", " ✂ ", OnCut));
-        _mainToolStrip.Items.Add(CreateToolButton("복사", "📋", OnCopy));
-        _mainToolStrip.Items.Add(CreateToolButton("붙여넣기", "📌", OnPaste));
-        _mainToolStrip.Items.Add(new ToolStripSeparator());
-        _mainToolStrip.Items.Add(CreateToolButton("실행 취소", " ↩ ", OnUndo));
-        _mainToolStrip.Items.Add(CreateToolButton("다시 실행", " ↪ ", OnRedo));
-        _mainToolStrip.Items.Add(new ToolStripSeparator());
-        _mainToolStrip.Items.Add(CreateToolButton("이미지 삽입", "🖼", OnInsertImageFile));
-        _mainToolStrip.Items.Add(CreateToolButton("클립보드 이미지", "📷", OnPasteClipboardImage));
-        _mainToolStrip.Items.Add(new ToolStripSeparator());
-        _mainToolStrip.Items.Add(CreateToolButton("찾기/바꾸기", "🔍", OnToggleFind));
-        _mainToolStrip.Items.Add(new ToolStripSeparator());
-        _mainToolStrip.Items.Add(CreateToolButton("인쇄", "🖨", OnPrint));
-    }
-
-    private void BuildFormatToolStrip()
-    {
-        _fontFamilyCombo = new ToolStripComboBox("fontFamily")
-        {
-            DropDownStyle = ComboBoxStyle.DropDownList, ToolTipText = "글꼴",
-            AutoSize = false,
-            Size = new Size(192, 25)
-        };
-        // 시스템에 설치된 모든 폰트 로딩
-        using (var ifc = new InstalledFontCollection())
-        {
-            foreach (var family in ifc.Families)
-            {
-                _fontFamilyCombo.Items.Add(family.Name);
-            }
-        }
-        // 기본 폰트 선택
-        int defaultFontIdx = _fontFamilyCombo.Items.IndexOf("맑은 고딕");
-        _fontFamilyCombo.SelectedIndex = defaultFontIdx >= 0 ? defaultFontIdx : 0;
-        _fontFamilyCombo.SelectedIndexChanged += FontFamily_Changed;
-        _formatToolStrip.Items.Add(_fontFamilyCombo);
-
-        _fontSizeCombo = new ToolStripComboBox("fontSize")
-        {
-            DropDownStyle = ComboBoxStyle.DropDown, ToolTipText = "글꼴 크기",
-            AutoSize = false,
-            Size = new Size(50, 25)
-        };
-        _fontSizeCombo.Items.AddRange(new object[] { "8", "9", "10", "11", "12", "14", "16", "18", "20", "24", "28", "32", "36", "48", "72" });
-        _fontSizeCombo.Text = "12";
-        _fontSizeCombo.KeyDown += FontSize_KeyDown;
-        _fontSizeCombo.SelectedIndexChanged += FontSize_Changed;
-        _formatToolStrip.Items.Add(_fontSizeCombo);
-
-        _formatToolStrip.Items.Add(new ToolStripSeparator());
-
-        _paragraphCombo = new ToolStripComboBox("paragraph")
-        {
-            DropDownStyle = ComboBoxStyle.DropDownList, Width = 75, ToolTipText = "문단 서식"
-        };
-        _paragraphCombo.Items.AddRange(new object[] { "본문", "제목1", "제목2", "제목3" });
-        _paragraphCombo.SelectedIndex = 0;
-        _paragraphCombo.SelectedIndexChanged += Paragraph_Changed;
-        _formatToolStrip.Items.Add(_paragraphCombo);
-
-        _formatToolStrip.Items.Add(new ToolStripSeparator());
-
-        _boldBtn = CreateToolButton("굵게 (Ctrl+B)", " B ", OnBold);
-        _boldBtn.Font = new Font("맑은 고딕", 12f, FontStyle.Bold);
-        _formatToolStrip.Items.Add(_boldBtn);
-
-        _italicBtn = CreateToolButton("기울임 (Ctrl+I)", " I ", OnItalic);
-        _italicBtn.Font = new Font("맑은 고딕", 12f, FontStyle.Italic);
-        _formatToolStrip.Items.Add(_italicBtn);
-
-        _underlineBtn = CreateToolButton("밑줄 (Ctrl+U)", " U ", OnUnderline);
-        _underlineBtn.Font = new Font("맑은 고딕", 12f, FontStyle.Underline);
-        _formatToolStrip.Items.Add(_underlineBtn);
-
-        _strikeBtn = CreateToolButton("취소선", " S ", OnStrikethrough);
-        _strikeBtn.Font = new Font("맑은 고딕", 12f, FontStyle.Strikeout);
-        _formatToolStrip.Items.Add(_strikeBtn);
-
-        _formatToolStrip.Items.Add(new ToolStripSeparator());
-
-        _textColorBtn = CreateToolButton("글자 색상", " A ", OnTextColor);
-        _textColorBtn.Font = new Font("맑은 고딕", 12f, FontStyle.Bold);
-        _textColorBtn.ForeColor = _currentTextColor;
-        _formatToolStrip.Items.Add(_textColorBtn);
-
-        _bgColorBtn = CreateToolButton("배경 색상", " ▮ ", OnBackColor);
-        _bgColorBtn.Font = new Font("맑은 고딕", 12f);
-        _bgColorBtn.ForeColor = _currentBgColor;
-        _formatToolStrip.Items.Add(_bgColorBtn);
-
-        _formatToolStrip.Items.Add(new ToolStripSeparator());
-
-        _alignLeftBtn = CreateToolButton("왼쪽 정렬", "≡←", OnAlignLeft);
-        _formatToolStrip.Items.Add(_alignLeftBtn);
-        _alignCenterBtn = CreateToolButton("가운데 정렬", "≡↔", OnAlignCenter);
-        _formatToolStrip.Items.Add(_alignCenterBtn);
-        _alignRightBtn = CreateToolButton("오른쪽 정렬", "≡→", OnAlignRight);
-        _formatToolStrip.Items.Add(_alignRightBtn);
-
-        _formatToolStrip.Items.Add(new ToolStripSeparator());
-
-        _bulletListBtn = CreateToolButton("글머리 기호", "•≡", OnBulletList);
-        _formatToolStrip.Items.Add(_bulletListBtn);
-        _outdentBtn = CreateToolButton("내어쓰기", "◁≡", OnOutdent);
-        _formatToolStrip.Items.Add(_outdentBtn);
-        _indentBtn = CreateToolButton("들여쓰기", "▷≡", OnIndent);
-        _formatToolStrip.Items.Add(_indentBtn);
-
-        _formatToolStrip.Items.Add(new ToolStripSeparator());
-        _formatToolStrip.Items.Add(CreateToolButton("링크 삽입", "🔗", OnInsertLink));
-        _formatToolStrip.Items.Add(CreateToolButton("수평선", "─", OnInsertHorizontalRule));
-        _formatToolStrip.Items.Add(CreateToolButton("표 삽입", "⊞", OnInsertTable));
-    }
-
-    #endregion
-
-    #region Find/Replace
-
-    private void BuildFindPanel()
-    {
-        _findPanel = new Panel
-        {
-            Dock = DockStyle.Top, Height = 36, Visible = false,
-            BackColor = SystemColors.Control, Padding = new Padding(8, 4, 8, 4)
-        };
-
-        var findLabel = new Label { Text = "찾기:", AutoSize = true, Location = new Point(8, 10) };
-        _findTextBox = new TextBox { Location = new Point(50, 7), Width = 150 };
-        _findTextBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { DoFind(); e.SuppressKeyPress = true; } };
-
-        var replaceLabel = new Label { Text = "바꾸기:", AutoSize = true, Location = new Point(210, 10) };
-        _replaceTextBox = new TextBox { Location = new Point(265, 7), Width = 150 };
-
-        var findBtn = new Button { Text = "찾기", Location = new Point(425, 5), Width = 60, Height = 26 };
-        findBtn.Click += (s, e) => DoFind();
-        var replaceBtn = new Button { Text = "바꾸기", Location = new Point(490, 5), Width = 60, Height = 26 };
-        replaceBtn.Click += (s, e) => DoReplace();
-        var replaceAllBtn = new Button { Text = "모두 바꾸기", Location = new Point(555, 5), Width = 80, Height = 26 };
-        replaceAllBtn.Click += (s, e) => DoReplaceAll();
-        var closeBtn = new Button { Text = "✕", Location = new Point(645, 5), Width = 30, Height = 26, FlatStyle = FlatStyle.Flat };
-        closeBtn.Click += (s, e) => { _findPanel.Visible = false; };
-
-        _findPanel.Controls.AddRange(new Control[] { findLabel, _findTextBox, replaceLabel, _replaceTextBox, findBtn, replaceBtn, replaceAllBtn, closeBtn });
-    }
-
-    private void DoFind()
-    {
-        if (ActiveEditor == null) return;
-        string searchText = _findTextBox.Text;
-        if (string.IsNullOrEmpty(searchText)) return;
-
-        int startIndex = ActiveEditor.SelectionStart + ActiveEditor.SelectionLength;
-        int index = ActiveEditor.Find(searchText, startIndex, FindOptions);
-        if (index == -1) index = ActiveEditor.Find(searchText, 0, FindOptions);
-
-        if (index == -1)
-            _statusLabel.Text = "찾을 수 없습니다.";
-        else
-        {
-            ActiveEditor.Select(index, searchText.Length);
-            ActiveEditor.ScrollToCaret();
-            _statusLabel.Text = $"찾음: 위치 {index}";
-        }
-    }
-
-    private void DoReplace()
-    {
-        if (ActiveEditor == null) return;
-        string searchText = _findTextBox.Text;
-        if (string.IsNullOrEmpty(searchText)) return;
-        if (string.Equals(ActiveEditor.SelectedText, searchText, StringComparison.OrdinalIgnoreCase))
-            ActiveEditor.SelectedText = _replaceTextBox.Text;
-        DoFind();
-    }
-
-    private void DoReplaceAll()
-    {
-        if (ActiveEditor == null) return;
-        string searchText = _findTextBox.Text;
-        string replaceText = _replaceTextBox.Text;
-        if (string.IsNullOrEmpty(searchText)) return;
-
-        int count = 0, index = 0;
-        while (true)
-        {
-            index = ActiveEditor.Find(searchText, index, FindOptions);
-            if (index == -1) break;
-            ActiveEditor.Select(index, searchText.Length);
-            ActiveEditor.SelectedText = replaceText;
-            index += Math.Max(replaceText.Length, searchText.Length);
-            count++;
-        }
-        _statusLabel.Text = $"{count}개 항목을 바꿨습니다.";
-    }
-
-    #endregion
-
-    #region File Operations
+    // ───────────────────────── 파일 작업 ─────────────────────────
 
     private void OnNew(object? sender, EventArgs e) => NewDocument();
 
@@ -1063,48 +718,66 @@ public partial class MainForm : Form
     {
         using var dlg = new OpenFileDialog
         {
-            Filter = "모든 지원 파일|*.txt;*.rtf;*.html;*.htm|텍스트 파일 (*.txt)|*.txt|서식 있는 텍스트 (*.rtf)|*.rtf|HTML (*.html)|*.html;*.htm|모든 파일 (*.*)|*.*",
-            FilterIndex = 1
+            Filter = "모든 파일 (*.*)|*.*|텍스트 파일 (*.txt)|*.txt|서식 있는 텍스트 (*.rtf)|*.rtf|HTML (*.html)|*.html;*.htm",
+            FilterIndex = 1,
+            Multiselect = true
         };
-        if (dlg.ShowDialog() == DialogResult.OK)
-            OpenFileInNewTab(dlg.FileName);
+        if (dlg.ShowDialog(this) == DialogResult.OK)
+        {
+            foreach (var f in dlg.FileNames) OpenFileInNewTab(f);
+        }
     }
 
-    private void OnSave(object? sender, EventArgs e)
+    private void OnSave(object? sender, EventArgs e) => SaveByIndex(_activeDocIndex);
+
+    private void OnSaveAs(object? sender, EventArgs e) => SaveAsByIndex(_activeDocIndex);
+
+    private void OnSaveAll(object? sender, EventArgs e)
     {
-        if (ActiveDoc == null) return;
-        if (ActiveDoc.FilePath == null)
-            OnSaveAs(sender, e);
-        else
-            SaveDocument(_activeDocIndex, ActiveDoc.FilePath);
+        for (int i = 0; i < _documents.Count; i++)
+        {
+            if (_documents[i].IsModified && !_documents[i].IsLargeFile)
+            {
+                SwitchToDocument(i);
+                SaveByIndex(i);
+            }
+        }
     }
 
-    private void OnSaveAs(object? sender, EventArgs e)
+    private void SaveByIndex(int index)
     {
-        if (ActiveDoc == null) return;
+        if (index < 0 || index >= _documents.Count) return;
+        var doc = _documents[index];
+        if (doc.FilePath == null) SaveAsByIndex(index);
+        else SaveDocument(index, doc.FilePath);
+    }
+
+    private void SaveAsByIndex(int index)
+    {
+        if (index < 0 || index >= _documents.Count) return;
+        var doc = _documents[index];
 
         using var dlg = new SaveFileDialog
         {
-            Filter = "텍스트 파일 (*.txt)|*.txt|서식 있는 텍스트 (*.rtf)|*.rtf|HTML (*.html)|*.html",
+            Filter = "텍스트 파일 (*.txt)|*.txt|서식 있는 텍스트 (*.rtf)|*.rtf|HTML (*.html)|*.html|모든 파일 (*.*)|*.*",
             FilterIndex = 1
         };
 
-        if (ActiveDoc.FilePath != null)
+        if (doc.FilePath != null)
         {
-            dlg.FileName = Path.GetFileName(ActiveDoc.FilePath);
-            string ext = Path.GetExtension(ActiveDoc.FilePath).ToLowerInvariant();
+            dlg.FileName = Path.GetFileName(doc.FilePath);
+            string ext = Path.GetExtension(doc.FilePath).ToLowerInvariant();
             dlg.FilterIndex = ext switch
             {
+                ".txt" => 1,
                 ".rtf" => 2,
                 ".html" or ".htm" => 3,
-                _ => 1
+                _ => 4
             };
         }
 
-        if (dlg.ShowDialog() == DialogResult.OK)
-        {
-            SaveDocument(_activeDocIndex, dlg.FileName);
-        }
+        if (dlg.ShowDialog(this) == DialogResult.OK)
+            SaveDocument(index, dlg.FileName);
     }
 
     private void SaveDocument(int index, string path)
@@ -1121,9 +794,10 @@ public partial class MainForm : Form
         }
 
         string ext = Path.GetExtension(path).ToLowerInvariant();
+        bool htmlFromRich = (ext == ".html" || ext == ".htm") && !doc.HtmlSource;
 
-        // Check if saving to text-only format while content has images
-        if ((ext == ".txt" || ext == ".html" || ext == ".htm") && DocumentHasImages(doc.Editor))
+        // 텍스트/HTML로 저장하면 이미지·서식이 사라지므로 경고
+        if ((ext == ".txt" || htmlFromRich) && DocumentHasImages(doc.Editor))
         {
             var result = MessageBox.Show(
                 "이 파일에는 이미지가 포함되어 있습니다.\n" +
@@ -1142,30 +816,56 @@ public partial class MainForm : Form
             {
                 case ".rtf":
                     doc.Editor.SaveFile(path, RichTextBoxStreamType.RichText);
+                    doc.IsRich = true;
                     break;
                 case ".ymemo":
                     SaveYmemoFrom(doc.Editor, path);
+                    doc.IsRich = true;
                     break;
                 case ".html":
                 case ".htm":
-                    string html = RtfHelper.ConvertToHtml(doc.Editor);
-                    File.WriteAllText(path, html, Encoding.UTF8);
+                    if (doc.HtmlSource)
+                    {
+                        WriteTextDoc(doc, path);
+                    }
+                    else
+                    {
+                        string html = RtfHelper.ConvertToHtml(doc.Editor);
+                        File.WriteAllText(path, html, new UTF8Encoding(false));
+                        doc.IsRich = false;
+                    }
                     break;
-                default: // .txt and others
-                    File.WriteAllText(path, doc.Editor.Text, Encoding.UTF8);
+                default:
+                    WriteTextDoc(doc, path);
+                    doc.IsRich = false;
                     break;
             }
 
             doc.FilePath = path;
             doc.Title = Path.GetFileName(path);
             doc.IsModified = false;
+            AddRecent(path);
             UpdateTabTitle(index);
-            UpdateTitle();
+            if (index == _activeDocIndex) { UpdateTitle(); UpdateDocMeta(); }
             _statusLabel.Text = $"저장됨: {path}";
         }
         catch (Exception ex)
         {
             MessageBox.Show($"파일을 저장할 수 없습니다.\n{ex.Message}", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    /// <summary>문서의 인코딩/줄 바꿈 형식을 유지하여 저장합니다.</summary>
+    private void WriteTextDoc(DocumentTab doc, string path)
+    {
+        var requested = doc.Encoding;
+        var used = TextFileHelper.Write(path, doc.Editor!.Text, requested, doc.Eol);
+        if (used != requested)
+        {
+            doc.Encoding = used;
+            MessageBox.Show(
+                "ANSI(CP949)로 표현할 수 없는 문자가 있어 UTF-8(BOM)으로 저장했습니다.",
+                _appTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 
@@ -1176,9 +876,15 @@ public partial class MainForm : Form
         return rtf.Contains("\\pict") || rtf.Contains("\\object");
     }
 
-    private void OnCloseTab(object? sender, EventArgs e)
+    private void OnCloseTab(object? sender, EventArgs e) => CloseDocument(_activeDocIndex);
+
+    private void OnCloseAll(object? sender, EventArgs e)
     {
-        CloseDocument(_activeDocIndex);
+        for (int i = _documents.Count - 1; i >= 0; i--)
+        {
+            if (i >= _documents.Count) continue;
+            if (!CloseDocument(i)) break;
+        }
     }
 
     private void OnPrint(object? sender, EventArgs e)
@@ -1204,20 +910,158 @@ public partial class MainForm : Form
                 if (result == DialogResult.Cancel) { e.Cancel = true; return; }
                 if (result == DialogResult.Yes)
                 {
-                    OnSave(null, EventArgs.Empty);
+                    SaveByIndex(i);
                     if (_documents[i].IsModified) { e.Cancel = true; return; }
                 }
             }
         }
 
-        // Save window settings before closing
         SaveSettings();
         base.OnFormClosing(e);
     }
 
-    #endregion
+    // ── 최근 파일 ──
 
-    #region Edit Operations
+    private void AddRecent(string path)
+    {
+        _recentFiles.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        _recentFiles.Insert(0, path);
+        while (_recentFiles.Count > 10) _recentFiles.RemoveAt(_recentFiles.Count - 1);
+    }
+
+    private void RebuildRecentMenu()
+    {
+        _recentMenu.DropDownItems.Clear();
+        if (_recentFiles.Count == 0)
+        {
+            _recentMenu.DropDownItems.Add(new ToolStripMenuItem("(없음)") { Enabled = false });
+            return;
+        }
+        for (int i = 0; i < _recentFiles.Count; i++)
+        {
+            string p = _recentFiles[i];
+            var item = new ToolStripMenuItem($"&{(i + 1) % 10} {p}");
+            item.Click += (_, _) =>
+            {
+                if (File.Exists(p)) OpenFileInNewTab(p);
+                else
+                {
+                    MessageBox.Show("파일을 찾을 수 없습니다:\n" + p, _appTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    _recentFiles.Remove(p);
+                }
+            };
+            _recentMenu.DropDownItems.Add(item);
+        }
+        _recentMenu.DropDownItems.Add(new ToolStripSeparator());
+        _recentMenu.DropDownItems.Add("목록 지우기", null, (_, _) => _recentFiles.Clear());
+    }
+
+    private void RebuildWindowMenu()
+    {
+        _windowMenu.DropDownItems.Clear();
+        if (_documents.Count == 0)
+        {
+            _windowMenu.DropDownItems.Add(new ToolStripMenuItem("(문서 없음)") { Enabled = false });
+            return;
+        }
+        for (int i = 0; i < _documents.Count; i++)
+        {
+            int idx = i;
+            var d = _documents[i];
+            string name = d.FilePath ?? d.Title;
+            var item = new ToolStripMenuItem($"{(i < 9 ? "&" : "")}{i + 1} {name}{(d.IsModified ? " *" : "")}") { Checked = i == _activeDocIndex };
+            item.Click += (_, _) => SwitchToDocument(idx);
+            _windowMenu.DropDownItems.Add(item);
+        }
+    }
+
+    // ───────────────────────── 인코딩 / 줄 바꿈 ─────────────────────────
+
+    private bool IsTextDoc(DocumentTab? d) => d != null && !d.IsLargeFile && !d.IsRich && d.Editor != null;
+
+    private void RefreshDocumentMenuState()
+    {
+        var d = ActiveDoc;
+        bool text = IsTextDoc(d);
+        foreach (var it in _encItems) { it.Enabled = text; it.Checked = text && (TextEnc)it.Tag! == d!.Encoding; }
+        foreach (var it in _eolItems) { it.Enabled = text; it.Checked = text && (EolKind)it.Tag! == d!.Eol; }
+    }
+
+    private void SetEncoding(TextEnc enc)
+    {
+        var d = ActiveDoc;
+        if (!IsTextDoc(d) || d!.Encoding == enc) return;
+        d.Encoding = enc;
+        MarkModified(d);
+        UpdateDocMeta();
+        _statusLabel.Text = $"저장 인코딩: {TextFileHelper.EncLabel(enc)} (저장 시 적용)";
+    }
+
+    private void SetEol(EolKind eol)
+    {
+        var d = ActiveDoc;
+        if (!IsTextDoc(d) || d!.Eol == eol) return;
+        d.Eol = eol;
+        MarkModified(d);
+        UpdateDocMeta();
+        _statusLabel.Text = $"줄 바꿈 형식: {TextFileHelper.EolLabel(eol)} (저장 시 적용)";
+    }
+
+    private void MarkModified(DocumentTab d)
+    {
+        if (d.IsModified) return;
+        d.IsModified = true;
+        int i = _documents.IndexOf(d);
+        UpdateTabTitle(i);
+        if (d == ActiveDoc) UpdateTitle();
+    }
+
+    /// <summary>잘못 감지된 인코딩을 사용자가 지정해서 다시 읽습니다.</summary>
+    private void ReopenWithEncoding(TextEnc enc)
+    {
+        var d = ActiveDoc;
+        if (!IsTextDoc(d) || d!.FilePath == null)
+        {
+            _statusLabel.Text = "저장된 텍스트 파일에서만 사용할 수 있습니다.";
+            return;
+        }
+        if (d.IsModified &&
+            MessageBox.Show("저장하지 않은 변경 내용이 사라집니다. 계속하시겠습니까?", _appTitle,
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+            return;
+
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(d.FilePath);
+            int skip = 0;
+            if (enc == TextEnc.Utf8 && bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            {
+                skip = 3;
+                enc = TextEnc.Utf8Bom;
+            }
+            string raw = TextFileHelper.GetEncoding(enc).GetString(bytes, skip, bytes.Length - skip);
+            var (text, _, eol) = TextFileHelper.Normalize(raw, enc);
+
+            _suppressModified = true;
+            try { d.Editor!.Text = text; }
+            finally { _suppressModified = false; }
+
+            d.Encoding = enc;
+            d.Eol = eol;
+            d.IsModified = false;
+            UpdateTabTitle(_activeDocIndex);
+            UpdateTitle();
+            UpdateDocMeta();
+            UpdateWordCount();
+            _statusLabel.Text = $"{TextFileHelper.EncLabel(enc)}(으)로 다시 열었습니다.";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"다시 열 수 없습니다.\n{ex.Message}", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    // ───────────────────────── 편집 작업 ─────────────────────────
 
     private void OnUndo(object? sender, EventArgs e) => ActiveEditor?.Undo();
     private void OnRedo(object? sender, EventArgs e) => ActiveEditor?.Redo();
@@ -1235,12 +1079,10 @@ public partial class MainForm : Form
         }
         else if (Clipboard.ContainsData(DataFormats.Html))
         {
-            // HTML 형식 → RichTextBox가 변환 처리
             ActiveEditor.Paste();
         }
         else if (Clipboard.ContainsImage())
         {
-            // 순수 이미지만 있는 경우 (스크린샷 등)
             PasteClipboardImage();
         }
         else
@@ -1251,18 +1093,473 @@ public partial class MainForm : Form
 
     private void OnSelectAll(object? sender, EventArgs e) => ActiveEditor?.SelectAll();
 
-    private void OnToggleFind(object? sender, EventArgs e)
+    private void OnDeleteLine(object? sender, EventArgs e)
     {
-        _findPanel.Visible = !_findPanel.Visible;
-        if (_findPanel.Visible)
+        var ed = ActiveEditor;
+        if (ed == null) return;
+        int line = _lineNumberPanel.GetLineFromChar(ed.SelectionStart);
+        int start = _lineNumberPanel.GetLineStart(line);
+        int len = _lineNumberPanel.GetLineLength(line);
+        bool hasNext = line + 1 < _lineNumberPanel.LineCount;
+        if (hasNext) len += 1;                    // 개행 포함
+        else if (start > 0) { start -= 1; len += 1; } // 마지막 줄이면 앞의 개행을 함께 제거
+        ed.Select(start, len);
+        ed.SelectedText = "";
+    }
+
+    private void OnDuplicateLine(object? sender, EventArgs e)
+    {
+        var ed = ActiveEditor;
+        if (ed == null) return;
+        int line = _lineNumberPanel.GetLineFromChar(ed.SelectionStart);
+        int start = _lineNumberPanel.GetLineStart(line);
+        int len = _lineNumberPanel.GetLineLength(line);
+        string text = _lineNumberPanel.GetRange(start, len);
+        ed.Select(start + len, 0);
+        ed.SelectedText = "\n" + text;
+    }
+
+    private void OnInsertDateTime(object? sender, EventArgs e)
+    {
+        if (ActiveEditor != null)
+            ActiveEditor.SelectedText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+    }
+
+    // ───────────────────────── 검색 / 이동 / 북마크 ─────────────────────────
+
+    private FindReplaceForm EnsureFindForm()
+    {
+        if (_findForm == null || _findForm.IsDisposed)
         {
-            _findTextBox.Focus();
-            if (ActiveEditor != null && ActiveEditor.SelectedText.Length > 0)
-                _findTextBox.Text = ActiveEditor.SelectedText;
+            _findForm = new FindReplaceForm(() => ActiveEditor);
+            _findForm.StatusMessage += m => _statusLabel.Text = m;
+        }
+        return _findForm;
+    }
+
+    private void OnFind(object? sender, EventArgs e) =>
+        EnsureFindForm().ShowFind(this, ActiveEditor?.SelectedText ?? "", false);
+
+    private void OnReplace(object? sender, EventArgs e) =>
+        EnsureFindForm().ShowFind(this, ActiveEditor?.SelectedText ?? "", true);
+
+    private void OnFindNext(object? sender, EventArgs e)
+    {
+        var f = EnsureFindForm();
+        if (string.IsNullOrEmpty(f.FindText)) { OnFind(sender, e); return; }
+        f.FindNext(true);
+    }
+
+    private void OnFindPrev(object? sender, EventArgs e)
+    {
+        var f = EnsureFindForm();
+        if (string.IsNullOrEmpty(f.FindText)) { OnFind(sender, e); return; }
+        f.FindNext(false);
+    }
+
+    private void OnGoToLine(object? sender, EventArgs e)
+    {
+        var ed = ActiveEditor;
+        if (ed == null) return;
+        int cur = _lineNumberPanel.GetLineFromChar(ed.SelectionStart) + 1;
+        using var dlg = new GoToLineDialog(cur, _lineNumberPanel.LineCount);
+        if (dlg.ShowDialog(this) == DialogResult.OK) GoToLine(dlg.Line - 1);
+    }
+
+    private void GoToLine(int line)
+    {
+        var ed = ActiveEditor;
+        if (ed == null) return;
+        ed.Select(_lineNumberPanel.GetLineStart(line), 0);
+        ed.ScrollToCaret();
+        ed.Focus();
+    }
+
+    private void OnToggleBookmark(object? sender, EventArgs e)
+    {
+        var ed = ActiveEditor;
+        if (ed == null) return;
+        _lineNumberPanel.ToggleBookmark(_lineNumberPanel.GetLineFromChar(ed.SelectionStart));
+    }
+
+    private void JumpBookmark(bool forward)
+    {
+        var ed = ActiveEditor;
+        if (ed == null) return;
+        int cur = _lineNumberPanel.GetLineFromChar(ed.SelectionStart);
+        int target = _lineNumberPanel.FindBookmark(cur, forward);
+        if (target < 0) { _statusLabel.Text = "북마크가 없습니다."; return; }
+        GoToLine(target);
+        _statusLabel.Text = $"북마크: {target + 1}줄";
+    }
+
+    private void OnNextBookmark(object? sender, EventArgs e) => JumpBookmark(true);
+    private void OnPrevBookmark(object? sender, EventArgs e) => JumpBookmark(false);
+    private void OnClearBookmarks(object? sender, EventArgs e) => _lineNumberPanel.ClearBookmarks();
+
+    // ───────────────────────── 에디터 이벤트 ─────────────────────────
+
+    private void Editor_TextChanged(object? sender, EventArgs e)
+    {
+        if (_suppressModified || sender is not RichTextBox rtb) return;
+        var doc = _documents.FirstOrDefault(d => d.Editor == rtb);
+        if (doc == null) return;
+
+        if (!doc.IsModified)
+        {
+            doc.IsModified = true;
+            UpdateTabTitle(_documents.IndexOf(doc));
+            if (doc == ActiveDoc) UpdateTitle();
+        }
+
+        if (doc == ActiveDoc)
+        {
+            // 단어 수 계산은 O(n)이므로 입력이 멈춘 뒤에만 수행
+            _countTimer.Stop();
+            _countTimer.Start();
         }
     }
 
-    #endregion
+    private void Editor_SelectionChanged(object? sender, EventArgs e)
+    {
+        if (ActiveEditor == null || sender != ActiveEditor) return;
+        UpdateCursorPosition();
+        UpdateFormatToolbarState();
+    }
+
+    private void Editor_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Control && e.Shift && e.KeyCode == Keys.V)
+        {
+            PasteClipboardImage();
+            e.Handled = true;
+        }
+    }
+
+    private static readonly Regex UrlRegex = new(@"(?:https?|ftp)://[^\s<>""']+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>Ctrl+클릭: 삽입한 하이퍼링크 또는 본문의 http(s):// 주소를 엽니다.</summary>
+    private void Editor_MouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || (ModifierKeys & Keys.Control) == 0) return;
+        if (sender is not RichTextBox rtb || rtb != ActiveEditor) return;
+
+        int idx = rtb.GetCharIndexFromPosition(e.Location);
+        if (idx < 0 || idx >= rtb.TextLength) return;
+
+        if (RtfHelper.TryOpenHyperlink(rtb, idx, idx + 1)) return;
+
+        int line = _lineNumberPanel.GetLineFromChar(idx);
+        int start = _lineNumberPanel.GetLineStart(line);
+        string text = _lineNumberPanel.GetRange(start, _lineNumberPanel.GetLineLength(line));
+        foreach (Match m in UrlRegex.Matches(text))
+        {
+            int abs = start + m.Index;
+            if (idx >= abs && idx <= abs + m.Length)
+            {
+                try { Process.Start(new ProcessStartInfo(m.Value.TrimEnd('.', ',', ')', ';')) { UseShellExecute = true }); } catch { }
+                return;
+            }
+        }
+    }
+
+    private void MainForm_Load(object? sender, EventArgs e)
+    {
+        // 창 크기가 확정된 뒤에 최소 크기와 분할 위치를 지정해야 SplitContainer가 예외를 던지지 않습니다.
+        try
+        {
+            if (!_splitContainer.Panel1Collapsed && _splitContainer.Width > S(400))
+            {
+                _splitContainer.Panel1MinSize = S(100);
+                _splitContainer.Panel2MinSize = S(200);
+                int maxDist = _splitContainer.Width - _splitContainer.Panel2MinSize - _splitContainer.SplitterWidth;
+                int want = _pendingSplitterDistance > 0 ? _pendingSplitterDistance : S(200);
+                _splitContainer.SplitterDistance = Math.Clamp(want, S(100), Math.Max(S(100), Math.Min(maxDist, S(600))));
+            }
+        }
+        catch (Exception) { /* 분할 위치 복원 실패 시 기본값 유지 */ }
+        _lastSplitter = _splitContainer.SplitterDistance;
+        SyncRuler();
+    }
+
+    private void MainForm_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.F1) { OnAbout(null, EventArgs.Empty); e.Handled = true; }
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == (Keys.Control | Keys.Tab)) { CycleDocument(+1); return true; }
+        if (keyData == (Keys.Control | Keys.Shift | Keys.Tab)) { CycleDocument(-1); return true; }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    private void UpdateFormatToolbarState()
+    {
+        if (ActiveEditor == null || _updatingToolbar) return;
+        _updatingToolbar = true;   // 프로그램이 콤보 값을 바꿀 때 서식이 다시 적용되어 '수정됨'으로 바뀌는 것을 방지
+        try
+        {
+            var font = ActiveEditor.SelectionFont;
+            if (font != null)
+            {
+                _boldBtn.Checked = font.Bold;
+                _italicBtn.Checked = font.Italic;
+                _underlineBtn.Checked = font.Underline;
+                _strikeBtn.Checked = font.Strikeout;
+                _fontSizeCombo.Text = font.Size.ToString("0.#");
+
+                int i = _fontFamilyCombo.Items.IndexOf(font.FontFamily.Name);
+                if (i >= 0 && _fontFamilyCombo.SelectedIndex != i) _fontFamilyCombo.SelectedIndex = i;
+            }
+            _alignLeftBtn.Checked = ActiveEditor.SelectionAlignment == HorizontalAlignment.Left;
+            _alignCenterBtn.Checked = ActiveEditor.SelectionAlignment == HorizontalAlignment.Center;
+            _alignRightBtn.Checked = ActiveEditor.SelectionAlignment == HorizontalAlignment.Right;
+            _bulletListBtn.Checked = ActiveEditor.SelectionBullet;
+        }
+        finally { _updatingToolbar = false; }
+    }
+
+    // ───────────────────────── 상태 표시줄 / 제목 ─────────────────────────
+
+    /// <summary>전각(한글/CJK) 문자는 2칸으로 계산합니다 (EditPlus와 동일한 방식).</summary>
+    private static int CellWidth(char c) =>
+        (c >= 0x1100 && c <= 0x115F) || (c >= 0x2E80 && c <= 0xA4CF) || (c >= 0xAC00 && c <= 0xD7A3) ||
+        (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE6F) || (c >= 0xFF00 && c <= 0xFF60) ||
+        (c >= 0xFFE0 && c <= 0xFFE6) ? 2 : 1;
+
+    private void UpdateCursorPosition()
+    {
+        if (ActiveDoc != null && ActiveDoc.IsLargeFile)
+        {
+            var viewer = ActiveDoc.LargeViewer!;
+            _lineColLabel.Text = $"줄 {viewer.CurrentLine + 1} / {viewer.TotalLines:N0}";
+            return;
+        }
+        var ed = ActiveEditor;
+        if (ed == null) return;
+
+        int idx = ed.SelectionStart;
+        int line = _lineNumberPanel.GetLineFromChar(idx);
+        int start = _lineNumberPanel.GetLineStart(line);
+        string prefix = _lineNumberPanel.GetRange(start, idx - start);
+        int col = 1;
+        foreach (char c in prefix) col += c == '\t' ? 1 : CellWidth(c);
+
+        string hex;
+        var ch = _lineNumberPanel.GetCharAt(idx);
+        if (!ch.HasValue) hex = "00";
+        else if (ch.Value == '\n') hex = ActiveDoc!.Eol == EolKind.Unix ? "0A" : "0D";
+        else hex = ch.Value > 0xFF ? ((int)ch.Value).ToString("X4") : ((int)ch.Value).ToString("X2");
+
+        _lineColLabel.Text = $"줄 {line + 1}  칸 {col}  {hex}";
+    }
+
+    private void UpdateDocMeta()
+    {
+        var d = ActiveDoc;
+        if (d == null) return;
+        if (d.IsLargeFile)
+        {
+            _eolLabel.Text = "";
+            _encodingLabel.Text = TextFileHelper.EncLabel(d.Encoding);
+        }
+        else if (d.IsRich)
+        {
+            _eolLabel.Text = "";
+            _encodingLabel.Text = "RTF";
+        }
+        else
+        {
+            _eolLabel.Text = TextFileHelper.EolLabel(d.Eol);
+            _encodingLabel.Text = TextFileHelper.EncLabel(d.Encoding);
+        }
+    }
+
+    private void UpdateTitle()
+    {
+        if (ActiveDoc == null) { Text = _appName; return; }
+        string name = ActiveDoc.FilePath ?? ActiveDoc.Title;
+        Text = $"{_appName} - [{name}{(ActiveDoc.IsModified ? " *" : "")}]";
+    }
+
+    private void UpdateWordCount()
+    {
+        if (ActiveDoc != null && ActiveDoc.IsLargeFile)
+        {
+            _wordCountLabel.Text = $"{ActiveDoc.LargeViewer!.TotalLines:N0} 줄 (대용량)";
+            return;
+        }
+        var ed = ActiveEditor;
+        if (ed == null) { _wordCountLabel.Text = ""; return; }
+
+        string text = ed.Text;
+        int words = 0;
+        bool inWord = false;
+        foreach (char c in text)
+        {
+            if (char.IsWhiteSpace(c)) inWord = false;
+            else if (!inWord) { inWord = true; words++; }
+        }
+        _wordCountLabel.Text = $"{words:N0} 단어 | {text.Length:N0} 자";
+    }
+
+    // ───────────────────────── 도움말 ─────────────────────────
+
+    private void OnAbout(object? sender, EventArgs e)
+    {
+        MessageBox.Show(
+            "윤슬 에디터 v1.2\n\n" +
+            "EditPlus 스타일 UI의 위지위그(WYSIWYG) 멀티탭 텍스트 편집기\n\n" +
+            "주요 기능:\n" +
+            "• 상단 문서 탭 / 눈금자 / 줄 번호 / 북마크 (Ctrl+F2, F2)\n" +
+            "• 좌측 디렉토리 창 + 클립텍스트\n" +
+            "• ANSI/UTF-8/UTF-16 자동 감지, PC/UNIX/MAC 줄 바꿈 유지\n" +
+            "• 찾기/바꾸기 (대소문자, 단어 단위, 정규식), 줄 이동 (Ctrl+G)\n" +
+            "• 굵게/기울임/밑줄/취소선, 글꼴·색상, 정렬, 글머리 기호\n" +
+            "• 이미지 삽입 (파일/클립보드) - 원본 크기\n" +
+            "• 하이퍼링크 / URL Ctrl+클릭으로 열기\n" +
+            "• 인쇄 미리보기, 5MB 이상 대용량 텍스트 읽기 모드\n" +
+            "• 파일 끌어다 놓기로 열기\n\n" +
+            "지원 형식: .txt, .rtf, .html 외 모든 텍스트 파일",
+            "윤슬 에디터 정보",
+            MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    // ───────────────────────── 설정 저장/복원 ─────────────────────────
+
+    private static string EscapeClip(string s) => s.Replace("\\", "\\\\").Replace("\r", "").Replace("\n", "\\n");
+
+    private static string UnescapeClip(string s)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '\\' && i + 1 < s.Length)
+            {
+                char n = s[++i];
+                sb.Append(n == 'n' ? '\n' : n);
+            }
+            else sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
+
+    private void SaveSettings()
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(_settingsPath);
+            if (dir != null && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+            var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            var lines = new List<string>
+            {
+                $"WindowWidth={b.Width}",
+                $"WindowHeight={b.Height}",
+                $"WindowLeft={b.Left}",
+                $"WindowTop={b.Top}",
+                $"WindowState={(WindowState == FormWindowState.Maximized ? FormWindowState.Maximized : FormWindowState.Normal)}",
+                $"ShowRuler={(_showRuler ? 1 : 0)}",
+                $"ShowLineNumbers={(_showLineNumbers ? 1 : 0)}",
+                $"ShowDirPane={(_showDirPane ? 1 : 0)}",
+                $"ShowStatusBar={(_showStatusBar ? 1 : 0)}",
+                $"ShowMainTool={(_showMainTool ? 1 : 0)}",
+                $"ShowFormatTool={(_showFormatTool ? 1 : 0)}",
+                $"WordWrap={(_wordWrap ? 1 : 0)}",
+                $"EditorFont={_editorFont.Name}|{_editorFont.Size.ToString(CultureInfo.InvariantCulture)}"
+            };
+            if (_lastSplitter > 0) lines.Add($"SplitterDistance={_lastSplitter}");
+            for (int i = 0; i < _recentFiles.Count; i++) lines.Add($"Recent{i}={_recentFiles[i]}");
+            lines.Add($"ClipCount={_clipItems.Count}");
+            for (int i = 0; i < _clipItems.Count; i++) lines.Add($"Clip{i}={EscapeClip(_clipItems[i])}");
+
+            File.WriteAllLines(_settingsPath, lines, new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    private void LoadSettings()
+    {
+        if (!File.Exists(_settingsPath)) return;
+
+        try
+        {
+            var s = new Dictionary<string, string>();
+            foreach (var line in File.ReadAllLines(_settingsPath))
+            {
+                int eq = line.IndexOf('=');
+                if (eq > 0) s[line[..eq]] = line[(eq + 1)..];
+            }
+
+            bool Flag(string key, bool def) => s.TryGetValue(key, out var v) ? v == "1" : def;
+            int Num(string key, int def) => s.TryGetValue(key, out var v) && int.TryParse(v, out int n) ? n : def;
+
+            _showRuler = Flag("ShowRuler", _showRuler);
+            _showLineNumbers = Flag("ShowLineNumbers", _showLineNumbers);
+            _showDirPane = Flag("ShowDirPane", _showDirPane);
+            _showStatusBar = Flag("ShowStatusBar", _showStatusBar);
+            _showMainTool = Flag("ShowMainTool", _showMainTool);
+            _showFormatTool = Flag("ShowFormatTool", _showFormatTool);
+            _wordWrap = Flag("WordWrap", _wordWrap);
+
+            if (s.TryGetValue("EditorFont", out var ef))
+            {
+                var parts = ef.Split('|');
+                if (parts.Length == 2 && float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float sz) && sz >= 6 && sz <= 72)
+                {
+                    try { _editorFont = new Font(parts[0], sz); } catch { }
+                }
+            }
+
+            if (s.TryGetValue("WindowState", out var stateStr) && Enum.TryParse<FormWindowState>(stateStr, out var state))
+                _pendingState = state;
+            if (s.ContainsKey("WindowWidth") && s.ContainsKey("WindowHeight") && s.ContainsKey("WindowLeft") && s.ContainsKey("WindowTop"))
+                _pendingBounds = new Rectangle(Num("WindowLeft", 0), Num("WindowTop", 0), Math.Max(400, Num("WindowWidth", 1100)), Math.Max(300, Num("WindowHeight", 750)));
+
+            _pendingSplitterDistance = Num("SplitterDistance", -1);
+
+            for (int i = 0; i < 10; i++)
+                if (s.TryGetValue($"Recent{i}", out var rp) && rp.Length > 0) _recentFiles.Add(rp);
+
+            if (s.ContainsKey("ClipCount"))
+            {
+                int n = Num("ClipCount", 0);
+                for (int i = 0; i < n; i++)
+                    if (s.TryGetValue($"Clip{i}", out var cv)) _clipItems.Add(UnescapeClip(cv));
+                _clipLoaded = true;
+            }
+        }
+        catch { }
+    }
+
+    private void ApplyWindowSettings()
+    {
+        if (_pendingState == FormWindowState.Maximized)
+        {
+            WindowState = FormWindowState.Maximized;
+        }
+        else if (_pendingBounds is Rectangle b)
+        {
+            // 모니터 구성이 바뀌어 창이 화면 밖에 있으면 복원하지 않고 가운데에 띄움
+            var probe = new Rectangle(b.Left, b.Top, Math.Min(b.Width, 200), Math.Min(b.Height, 100));
+            if (Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(probe)))
+            {
+                StartPosition = FormStartPosition.Manual;
+                Bounds = b;
+            }
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _countTimer.Dispose();
+            _findForm?.Dispose();
+        }
+        base.Dispose(disposing);
+    }
 
     #region Format Operations
 
@@ -1289,7 +1586,7 @@ public partial class MainForm : Form
         {
             _currentTextColor = dlg.Color;
             ActiveEditor.SelectionColor = _currentTextColor;
-            _textColorBtn.ForeColor = _currentTextColor;
+            UpdateColorIcons();
         }
     }
 
@@ -1301,7 +1598,7 @@ public partial class MainForm : Form
         {
             _currentBgColor = dlg.Color;
             ActiveEditor.SelectionBackColor = _currentBgColor;
-            _bgColorBtn.ForeColor = _currentBgColor;
+            UpdateColorIcons();
         }
     }
 
@@ -1341,22 +1638,15 @@ public partial class MainForm : Form
         }
     }
 
-    private void OnToggleWordWrap(object? sender, EventArgs e)
-    {
-        if (ActiveEditor == null) return;
-        ActiveEditor.WordWrap = !ActiveEditor.WordWrap;
-        _statusLabel.Text = ActiveEditor.WordWrap ? "자동 줄 바꿈: 켜짐" : "자동 줄 바꿈: 꺼짐";
-    }
-
     private void FontFamily_Changed(object? sender, EventArgs e)
     {
-        if (ActiveEditor == null || _fontFamilyCombo.SelectedItem == null) return;
+        if (_updatingToolbar || ActiveEditor == null || _fontFamilyCombo.SelectedItem == null) return;
         string fontName = _fontFamilyCombo.SelectedItem.ToString()!;
         var currentFont = ActiveEditor.SelectionFont ?? ActiveEditor.Font;
         try { ApplySelectionFont(new Font(fontName, currentFont.Size, currentFont.Style)); } catch { }
     }
 
-    private void FontSize_Changed(object? sender, EventArgs e) => ApplyFontSize();
+    private void FontSize_Changed(object? sender, EventArgs e) { if (!_updatingToolbar) ApplyFontSize(); }
     private void FontSize_KeyDown(object? sender, KeyEventArgs e)
     {
         if (e.KeyCode == Keys.Enter) { ApplyFontSize(); e.SuppressKeyPress = true; }
@@ -1374,14 +1664,14 @@ public partial class MainForm : Form
 
     private void Paragraph_Changed(object? sender, EventArgs e)
     {
-        if (ActiveEditor == null || _paragraphCombo.SelectedIndex < 0) return;
+        if (_updatingToolbar || ActiveEditor == null || _paragraphCombo.SelectedIndex < 0) return;
         var currentFont = ActiveEditor.SelectionFont ?? ActiveEditor.Font;
         var (size, style) = _paragraphCombo.SelectedIndex switch
         {
             1 => (24f, FontStyle.Bold),
             2 => (18f, FontStyle.Bold),
             3 => (14f, FontStyle.Bold),
-            _ => (12f, FontStyle.Regular)
+            _ => (_editorFont.Size, FontStyle.Regular)
         };
         ApplySelectionFont(new Font(currentFont.FontFamily, size, style));
     }
@@ -1551,176 +1841,6 @@ public partial class MainForm : Form
 
     #endregion
 
-    #region Help
-
-    private void OnAbout(object? sender, EventArgs e)
-    {
-        MessageBox.Show(
-            "윤슬 에디터 v1.1\n\n" +
-            "위지위그(WYSIWYG) 멀티탭 텍스트 편집기\n\n" +
-            "주요 기능:\n" +
-            "• 좌측 파일 브라우저\n" +
-            "• 멀티 문서 탭 (하단 탭 바)\n" +
-            "• 굵게/기울임/밑줄/취소선\n" +
-            "• 글꼴, 크기, 색상 변경\n" +
-            "• 문단 서식, 정렬, 글머리 기호\n" +
-            "• 이미지 삽입 (파일/클립보드) - 원본 크기\n" +
-            "• 하이퍼링크 삽입 (Ctrl+클릭으로 열기)\n" +
-            "• 수평선, 표 삽입\n" +
-            "• 찾기/바꾸기\n" +
-            "• 인쇄 미리보기 (여백 조정)\n" +
-            "• A4 용지 윤곽선 가이드\n\n" +
-            "지원 형식: .txt, .rtf, .html",
-            "윤슬 에디터 정보",
-            MessageBoxButtons.OK, MessageBoxIcon.Information);
-    }
-
-    #endregion
-
-    #region Editor Event Handlers
-
-    private void Editor_TextChanged(object? sender, EventArgs e)
-    {
-        if (ActiveEditor == null || sender != ActiveEditor) return;
-        if (!ActiveDoc.IsModified)
-        {
-            ActiveDoc.IsModified = true;
-            UpdateTabTitle(_activeDocIndex);
-            UpdateTitle();
-        }
-        UpdateWordCount();
-    }
-
-    private void Editor_SelectionChanged(object? sender, EventArgs e)
-    {
-        if (ActiveEditor == null || sender != ActiveEditor) return;
-        UpdateCursorPosition();
-        UpdateFormatToolbarState();
-    }
-
-    private void Editor_KeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Control && e.Shift && e.KeyCode == Keys.V)
-        {
-            PasteClipboardImage();
-            e.Handled = true;
-        }
-    }
-
-    private void MainForm_Load(object? sender, EventArgs e)
-    {
-        // 폼이 완전히 로드된 후 splitter 위치 복원
-        if (_pendingSplitterDistance > 0)
-        {
-            int maxDist = _splitContainer.Width - _splitContainer.Panel2MinSize - _splitContainer.SplitterWidth;
-            _splitContainer.SplitterDistance = Math.Clamp(_pendingSplitterDistance, 120, Math.Min(maxDist, 600));
-        }
-    }
-
-    private void MainForm_KeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.KeyCode == Keys.Escape && _findPanel.Visible)
-        {
-            _findPanel.Visible = false;
-            e.Handled = true;
-        }
-    }
-
-    private void SplitContainer_Paint(object? sender, PaintEventArgs e)
-    {
-        if (sender is not SplitContainer sc) return;
-
-        var rect = sc.SplitterRectangle;
-        using var pen = new Pen(Color.FromArgb(180, 180, 175), 1f);
-        using var dotBrush = new SolidBrush(Color.FromArgb(160, 160, 155));
-
-        if (sc.Orientation == Orientation.Vertical)
-        {
-            // 좌우 분할: 세로선 + 그립 점
-            int cx = rect.Left + rect.Width / 2;
-            e.Graphics.DrawLine(pen, cx, rect.Top + 4, cx, rect.Bottom - 4);
-            int cy = rect.Top + rect.Height / 2;
-            for (int i = -2; i <= 2; i++)
-                e.Graphics.FillEllipse(dotBrush, cx - 1, cy + i * 6 - 1, 3, 3);
-        }
-        else
-        {
-            // 상하 분할: 가로선 + 그립 점
-            int cy = rect.Top + rect.Height / 2;
-            e.Graphics.DrawLine(pen, rect.Left + 4, cy, rect.Right - 4, cy);
-            int cx = rect.Left + rect.Width / 2;
-            for (int i = -2; i <= 2; i++)
-                e.Graphics.FillEllipse(dotBrush, cx + i * 6 - 1, cy - 1, 3, 3);
-        }
-    }
-
-    /// <summary>
-    /// A4 용지 윤곽선을 부드럽게 그립니다.
-    /// 편집 영역 주변에 용지 테두리를 표시합니다.
-    /// </summary>
-    private void PageOutlinePanel_Paint(object? sender, PaintEventArgs e)
-    {
-        var g = e.Graphics;
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-
-        var pad = _pageOutlinePanel.Padding;
-        // 에디터 영역 (패딩 안쪽)의 테두리를 그림
-        var editorRect = new Rectangle(
-            pad.Left - 1, pad.Top - 1,
-            _pageOutlinePanel.ClientSize.Width - pad.Left - pad.Right + 2,
-            _pageOutlinePanel.ClientSize.Height - pad.Top - pad.Bottom + 2);
-
-        // 부드러운 그림자 효과
-        using var shadowPen = new Pen(Color.FromArgb(40, 0, 0, 0), 1f);
-        var shadowRect = new Rectangle(editorRect.X + 2, editorRect.Y + 2, editorRect.Width, editorRect.Height);
-        g.DrawRectangle(shadowPen, shadowRect);
-
-        // 용지 테두리 (부드러운 라운드 효과)
-        using var borderPen = new Pen(Color.FromArgb(180, 190, 190, 185), 1.2f);
-        g.DrawRectangle(borderPen, editorRect);
-    }
-
-    private void UpdateFormatToolbarState()
-    {
-        if (ActiveEditor == null) return;
-        var font = ActiveEditor.SelectionFont;
-        if (font != null)
-        {
-            _boldBtn.Checked = font.Bold;
-            _italicBtn.Checked = font.Italic;
-            _underlineBtn.Checked = font.Underline;
-            _strikeBtn.Checked = font.Strikeout;
-            _fontSizeCombo.Text = font.Size.ToString("0");
-
-            for (int i = 0; i < _fontFamilyCombo.Items.Count; i++)
-            {
-                if (_fontFamilyCombo.Items[i]?.ToString() == font.FontFamily.Name)
-                { _fontFamilyCombo.SelectedIndex = i; break; }
-            }
-        }
-        _alignLeftBtn.Checked = ActiveEditor.SelectionAlignment == HorizontalAlignment.Left;
-        _alignCenterBtn.Checked = ActiveEditor.SelectionAlignment == HorizontalAlignment.Center;
-        _alignRightBtn.Checked = ActiveEditor.SelectionAlignment == HorizontalAlignment.Right;
-        _bulletListBtn.Checked = ActiveEditor.SelectionBullet;
-    }
-
-    private void UpdateCursorPosition()
-    {
-        if (ActiveDoc != null && ActiveDoc.IsLargeFile)
-        {
-            var viewer = ActiveDoc.LargeViewer!;
-            _lineColLabel.Text = $"줄: {viewer.CurrentLine + 1} / {viewer.TotalLines:N0}";
-            return;
-        }
-        if (ActiveEditor == null) return;
-        int charIndex = ActiveEditor.SelectionStart;
-        int line = ActiveEditor.GetLineFromCharIndex(charIndex);
-        int col = charIndex - ActiveEditor.GetFirstCharIndexFromLine(line);
-        _lineColLabel.Text = $"줄: {line + 1}, 열: {col + 1}";
-    }
-
-    #endregion
-
     #region Helpers
 
     private static void ApplySelectionFont(RichTextBox editor, Font font)
@@ -1735,120 +1855,6 @@ public partial class MainForm : Form
             ApplySelectionFont(ActiveEditor, font);
         else
             font.Dispose();
-    }
-
-    private ToolStripMenuItem CreateMenuItem(string text, Keys shortcut, EventHandler handler)
-    {
-        var item = new ToolStripMenuItem(text);
-        if (shortcut != Keys.None) item.ShortcutKeys = shortcut;
-        item.Click += handler;
-        return item;
-    }
-
-    private ToolStripButton CreateToolButton(string tooltip, string text, EventHandler handler)
-    {
-        var btn = new ToolStripButton(text)
-        {
-            ToolTipText = tooltip,
-            AutoSize = true,
-            Padding = new Padding(4, 2, 4, 2)
-        };
-        btn.Click += handler;
-        return btn;
-    }
-
-    private void UpdateTitle()
-    {
-        if (ActiveDoc == null) { Text = _appTitle; return; }
-        string fileName = ActiveDoc.FilePath != null ? Path.GetFileName(ActiveDoc.FilePath) : ActiveDoc.Title;
-        string modified = ActiveDoc.IsModified ? "*" : "";
-        Text = $"{modified}{fileName} - {_appTitle}";
-    }
-
-    private void UpdateWordCount()
-    {
-        if (ActiveDoc != null && ActiveDoc.IsLargeFile)
-        {
-            _wordCountLabel.Text = $"{ActiveDoc.LargeViewer!.TotalLines:N0} 줄 (대용량 모드)";
-            return;
-        }
-        if (ActiveEditor == null) { _wordCountLabel.Text = ""; return; }
-        string text = ActiveEditor.Text;
-        int charCount = text.Length;
-        int wordCount = string.IsNullOrWhiteSpace(text) ? 0 : text.Split(new[] { ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
-        _wordCountLabel.Text = $"{wordCount} 단어 | {charCount} 자";
-    }
-
-    #endregion
-
-    #region Settings Persistence
-
-    private void SaveSettings()
-    {
-        try
-        {
-            string? dir = Path.GetDirectoryName(_settingsPath);
-            if (dir != null && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            var lines = new List<string>
-            {
-                $"SplitterDistance={_splitContainer.SplitterDistance}",
-                $"WindowWidth={Width}",
-                $"WindowHeight={Height}",
-                $"WindowLeft={Left}",
-                $"WindowTop={Top}",
-                $"WindowState={WindowState}"
-            };
-            File.WriteAllLines(_settingsPath, lines, Encoding.UTF8);
-        }
-        catch { }
-    }
-
-    private int _pendingSplitterDistance = -1;
-
-    private void LoadSettings()
-    {
-        if (!File.Exists(_settingsPath)) return;
-
-        try
-        {
-            var settings = new Dictionary<string, string>();
-            foreach (var line in File.ReadAllLines(_settingsPath))
-            {
-                int eq = line.IndexOf('=');
-                if (eq > 0)
-                    settings[line[..eq]] = line[(eq + 1)..];
-            }
-
-            if (settings.TryGetValue("WindowState", out var stateStr) &&
-                Enum.TryParse<FormWindowState>(stateStr, out var state))
-            {
-                if (state == FormWindowState.Maximized)
-                {
-                    WindowState = FormWindowState.Maximized;
-                }
-                else
-                {
-                    if (settings.TryGetValue("WindowWidth", out var w) && int.TryParse(w, out int width))
-                        Width = Math.Max(400, width);
-                    if (settings.TryGetValue("WindowHeight", out var h) && int.TryParse(h, out int height))
-                        Height = Math.Max(300, height);
-                    if (settings.TryGetValue("WindowLeft", out var l) && int.TryParse(l, out int left))
-                        Left = Math.Max(0, left);
-                    if (settings.TryGetValue("WindowTop", out var t) && int.TryParse(t, out int top))
-                        Top = Math.Max(0, top);
-                    StartPosition = FormStartPosition.Manual;
-                }
-            }
-
-            if (settings.TryGetValue("SplitterDistance", out var sd) && int.TryParse(sd, out int splitter))
-            {
-                // 폼 로드 후 적용하기 위해 저장
-                _pendingSplitterDistance = splitter;
-            }
-        }
-        catch { }
     }
 
     #endregion
@@ -1869,4 +1875,19 @@ public class DocumentTab
 
     /// <summary>대용량 모드 여부</summary>
     public bool IsLargeFile => LargeViewer != null;
+
+    /// <summary>저장할 인코딩 (열 때 자동 감지한 값 유지)</summary>
+    public TextEnc Encoding { get; set; } = TextEnc.Utf8Bom;
+
+    /// <summary>저장할 줄 바꿈 형식 (열 때 감지한 값 유지)</summary>
+    public EolKind Eol { get; set; } = EolKind.Pc;
+
+    /// <summary>RTF/ymemo 등 서식 있는 문서 여부</summary>
+    public bool IsRich { get; set; }
+
+    /// <summary>.html/.htm 파일을 소스 그대로 열어 편집 중인지 (true면 저장 시 변환 없이 원문 저장)</summary>
+    public bool HtmlSource { get; set; }
+
+    /// <summary>북마크한 줄 번호 (0-based)</summary>
+    public HashSet<int> Bookmarks { get; } = new();
 }
