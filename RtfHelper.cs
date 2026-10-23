@@ -205,7 +205,7 @@ internal static class RtfHelper
     private static string ToHtmlColor(Color color) =>
         $"#{color.R:X2}{color.G:X2}{color.B:X2}";
 
-    private static string EscapeRtfText(string text)
+    internal static string EscapeRtfText(string text)
     {
         var sb = new StringBuilder(text.Length);
         foreach (char ch in text)

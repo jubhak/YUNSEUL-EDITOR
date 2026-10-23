@@ -250,7 +250,9 @@ public sealed class DocumentTabStrip : Control
         else if (e.Button == MouseButtons.Right)
         {
             SelectedIndex = i;
-            TabContextRequested?.Invoke(this, (i, e.Location));
+            Capture = false;
+            var loc = e.Location;
+            BeginInvoke(new Action(() => TabContextRequested?.Invoke(this, (i, loc))));
         }
     }
 

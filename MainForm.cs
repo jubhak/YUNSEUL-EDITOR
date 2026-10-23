@@ -43,6 +43,14 @@ public partial class MainForm : Form
 
     private FindReplaceForm? _findForm;
 
+    // 컨텍스트 메뉴
+    private readonly ContextMenuStrip _tabContextMenu = new();
+    private readonly ContextMenuStrip _editorContextMenu = new();
+    private ToolStripMenuItem _miEditCut = null!;
+    private ToolStripMenuItem _miEditCopy = null!;
+    private ToolStripMenuItem _miEditPaste = null!;
+    private ToolStripMenuItem _miEditTableProps = null!;
+
     private static readonly string[] DefaultClips =
     {
         "$(DATE)", "$(TIME)", "$(DATETIME)",
@@ -62,6 +70,7 @@ public partial class MainForm : Form
         InitializeComponent();
         ApplyWindowSettings();
         ApplyViewSettings();
+        InitContextMenus();
 
         _splitContainer.SplitterMoved += (_, _) =>
         {
@@ -536,23 +545,98 @@ public partial class MainForm : Form
         _activeDocIndex = _docTabs.SelectedIndex;
     }
 
+    private void InitContextMenus()
+    {
+        _tabContextMenu.Renderer = new EditPlusRenderer();
+        _editorContextMenu.Renderer = new EditPlusRenderer();
+
+        _miEditCut = new ToolStripMenuItem("잘라내기(&T)", null, (_, _) => ActiveEditor?.Cut(), Keys.Control | Keys.X);
+        _miEditCopy = new ToolStripMenuItem("복사(&C)", null, (_, _) => ActiveEditor?.Copy(), Keys.Control | Keys.C);
+        _miEditPaste = new ToolStripMenuItem("붙여넣기(&P)", null, (_, _) => { if (ActiveEditor != null) HandleCustomPaste(ActiveEditor); }, Keys.Control | Keys.V);
+        var miDelete = new ToolStripMenuItem("삭제(&D)", null, (_, _) => { if (ActiveEditor != null) ActiveEditor.SelectedText = ""; }, Keys.Delete);
+        var miSelectAll = new ToolStripMenuItem("모두 선택(&A)", null, (_, _) => ActiveEditor?.SelectAll(), Keys.Control | Keys.A);
+
+        _miEditTableProps = new ToolStripMenuItem("표 서식 및 속성 변경(&E)...", null, (_, _) => OnInsertOrEditTable(true));
+        var miInsertTable = new ToolStripMenuItem("표 삽입(&I)...", null, (_, _) => OnInsertOrEditTable(false));
+
+        _editorContextMenu.Items.AddRange(new ToolStripItem[]
+        {
+            _miEditCut,
+            _miEditCopy,
+            _miEditPaste,
+            miDelete,
+            new ToolStripSeparator(),
+            miSelectAll,
+            new ToolStripSeparator(),
+            _miEditTableProps,
+            miInsertTable,
+            new ToolStripSeparator(),
+            new ToolStripMenuItem("글꼴 서식(&F)...", null, OnEditorFontSetting)
+        });
+
+        _editorContextMenu.Opening += EditorContextMenu_Opening;
+    }
+
+    private void EditorContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (ActiveEditor == null) { e.Cancel = true; return; }
+        bool hasSelection = ActiveEditor.SelectionLength > 0;
+        _miEditCut.Enabled = hasSelection;
+        _miEditCopy.Enabled = hasSelection;
+        _miEditPaste.Enabled = Clipboard.ContainsText() || Clipboard.ContainsImage();
+        _miEditTableProps.Enabled = TableHelper.IsCursorInTable(ActiveEditor);
+    }
+
     private void DocTabs_ContextRequested(object? sender, (int Index, Point Location) a)
     {
         if (a.Index < 0 || a.Index >= _documents.Count) return;
         var doc = _documents[a.Index];
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("닫기", null, (_, _) => CloseDocument(_documents.IndexOf(doc)));
-        menu.Items.Add("다른 문서 모두 닫기", null, (_, _) => CloseOthers(doc));
-        menu.Items.Add(new ToolStripSeparator());
+
+        _tabContextMenu.Items.Clear();
+        _tabContextMenu.Items.Add("닫기", null, (_, _) => CloseDocument(_documents.IndexOf(doc)));
+        _tabContextMenu.Items.Add("다른 문서 모두 닫기", null, (_, _) => CloseOthers(doc));
+
+        int docIdx = _documents.IndexOf(doc);
+        bool hasRight = docIdx >= 0 && docIdx < _documents.Count - 1;
+        bool hasLeft = docIdx > 0;
+
+        var miRight = new ToolStripMenuItem("오른쪽 문서 모두 닫기", null, (_, _) => CloseRight(doc)) { Enabled = hasRight };
+        var miLeft = new ToolStripMenuItem("왼쪽 문서 모두 닫기", null, (_, _) => CloseLeft(doc)) { Enabled = hasLeft };
+
+        _tabContextMenu.Items.Add(miRight);
+        _tabContextMenu.Items.Add(miLeft);
+        _tabContextMenu.Items.Add(new ToolStripSeparator());
+
         var copyPath = new ToolStripMenuItem("경로 복사", null, (_, _) => { try { Clipboard.SetText(doc.FilePath!); } catch { } }) { Enabled = doc.FilePath != null };
         var openFolder = new ToolStripMenuItem("탐색기에서 폴더 열기", null, (_, _) =>
         {
             try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{doc.FilePath}\"") { UseShellExecute = true }); } catch { }
         }) { Enabled = doc.FilePath != null };
-        menu.Items.Add(copyPath);
-        menu.Items.Add(openFolder);
-        menu.Closed += (_, _) => menu.Dispose();
-        menu.Show(_docTabs, a.Location);
+        _tabContextMenu.Items.Add(copyPath);
+        _tabContextMenu.Items.Add(openFolder);
+
+        // 재사용 메뉴이므로 닫힐 때 Dispose 호출 안 함 (ObjectDisposedException 방지)
+        _tabContextMenu.Show(_docTabs, a.Location);
+    }
+
+    private void CloseRight(DocumentTab keep)
+    {
+        while (true)
+        {
+            int keepIdx = _documents.IndexOf(keep);
+            if (keepIdx < 0 || keepIdx >= _documents.Count - 1) break;
+            if (!CloseDocument(keepIdx + 1)) break;
+        }
+    }
+
+    private void CloseLeft(DocumentTab keep)
+    {
+        while (true)
+        {
+            int keepIdx = _documents.IndexOf(keep);
+            if (keepIdx <= 0) break;
+            if (!CloseDocument(keepIdx - 1)) break;
+        }
     }
 
     private void CycleDocument(int step)
@@ -658,6 +742,7 @@ public partial class MainForm : Form
 
         // Ctrl+V (WM_PASTE)를 가로채서 이미지+텍스트 혼합 붙여넣기 지원
         rtb.CustomPasteHandler = () => HandleCustomPaste(rtb);
+        rtb.ContextMenuStrip = _editorContextMenu;
         return rtb;
     }
 
@@ -1788,25 +1873,47 @@ public partial class MainForm : Form
 
     private void OnInsertTable(object? sender, EventArgs e)
     {
-        if (ActiveEditor == null) return;
-        using var dlg = new TableDialog();
-        if (dlg.ShowDialog() == DialogResult.OK)
-        {
-            ActiveEditor.SelectedText = GenerateTextTable(dlg.Rows, dlg.Cols);
-            _statusLabel.Text = $"표 삽입됨: {dlg.Rows}행 × {dlg.Cols}열";
-        }
+        OnInsertOrEditTable(forceEdit: false);
     }
 
-    private string GenerateTextTable(int rows, int cols)
+    private void OnInsertOrEditTable(bool forceEdit = false)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine();
-        string sep = "+"; string hdr = "|";
-        for (int c = 0; c < cols; c++) { sep += "----------+"; hdr += $" 열{c + 1,-6}  |"; }
-        sb.AppendLine(sep); sb.AppendLine(hdr); sb.AppendLine(sep);
-        for (int r = 1; r < rows; r++) { string row = "|"; for (int c = 0; c < cols; c++) row += "          |"; sb.AppendLine(row); }
-        sb.AppendLine(sep); sb.AppendLine();
-        return sb.ToString();
+        if (ActiveEditor == null) return;
+
+        bool inTable = TableHelper.IsCursorInTable(ActiveEditor);
+        if (inTable || forceEdit)
+        {
+            // 커서가 표 내부에 있으면 표 서식 및 속성 변경 모드
+            if (TableHelper.TrySelectTableAtCursor(ActiveEditor, out _))
+            {
+                string rtf = ActiveEditor.SelectedRtf ?? "";
+                string[,]? cellData = TableHelper.ParseTableCells(rtf, out int oldRows, out int oldCols);
+
+                var initOpt = new TableStyleOptions
+                {
+                    Rows = Math.Max(1, oldRows),
+                    Cols = Math.Max(1, oldCols)
+                };
+
+                using var dlg = new TableDialog(isModifyMode: true, initialOptions: initOpt);
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    TableHelper.InsertTable(ActiveEditor, dlg.Options, cellData);
+                    string borderDesc = dlg.IsTransparentBorder ? "투명선" : $"{dlg.BorderWidth}pt";
+                    _statusLabel.Text = $"표 서식 변경 완료: {dlg.Rows}행 × {dlg.Cols}열 (선: {borderDesc})";
+                }
+                return;
+            }
+        }
+
+        // 신규 표 삽입 모드
+        using var newDlg = new TableDialog(isModifyMode: false);
+        if (newDlg.ShowDialog(this) == DialogResult.OK)
+        {
+            TableHelper.InsertTable(ActiveEditor, newDlg.Options);
+            string borderDesc = newDlg.IsTransparentBorder ? "투명선" : $"{newDlg.BorderWidth}pt";
+            _statusLabel.Text = $"멋진 표 삽입 완료: {newDlg.Rows}행 × {newDlg.Cols}열 (선: {borderDesc})";
+        }
     }
 
     #endregion
